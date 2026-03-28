@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="robots" content="noindex"/>
+  <title>404 — Page Not Found | Wright Ideas</title>
+  <link rel="icon" href="favicon.ico" type="image/x-icon" sizes="16x16"/>
+  <link rel="stylesheet" href="custom.css"/>
+</head>
+<body>
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+
+  <div class="page-wrapper">
+
+    <!-- HEADER -->
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="/">Wright Ideas</a>
+        <ul class="nav-links">
+          <li><a href="/">Home</a></li>
+          <li><a href="/about">About</a></li>
+          <li><a href="/products">Products</a></li>
+          <li><a href="/privacy">Privacy</a></li>
+          <li><a href="/terms">Terms</a></li>
+          <li><a href="/contact">Contact</a></li>
+        </ul>
+        <button class="hamburger" id="menuBtn" aria-label="Toggle menu">
+          <svg width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 6h16M4 12h16M4 18h16"/>
+          </svg>
+        </button>
+      </div>
+      <nav class="mobile-nav" id="mobileNav">
+        <a href="/">Home</a>
+        <a href="/about">About</a>
+        <a href="/products">Products</a>
+        <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
+        <a href="/contact">Contact</a>
+      </nav>
+    </header>
+
+    <main>
+      <div class="not-found-wrap">
+        <div class="not-found-num">404</div>
+        <h1 class="not-found-title">Lost in Space</h1>
+        <p class="not-found-desc">The page you're looking for has drifted off into the cosmos.<br/>Let's get you back on course.</p>
+        <div style="display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;">
+          <a href="/" class="btn-primary">← Back to Home</a>
+          <a href="/contact" class="btn-secondary">Contact Us</a>
+        </div>
+        <!-- Decorative rings -->
+        <div style="margin-top:4rem;position:relative;width:200px;height:200px;opacity:0.18;" aria-hidden="true">
+          <div style="position:absolute;inset:0;border:1px solid #8b5cf6;border-radius:50%;animation:spin1 8s linear infinite;"></div>
+          <div style="position:absolute;inset:22px;border:1px solid #60a5fa;border-radius:50%;animation:spin2 12s linear infinite;"></div>
+          <div style="position:absolute;inset:44px;border:1px solid #22d3ee;border-radius:50%;animation:spin1 6s linear infinite;"></div>
+          <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:2.5rem;">🌌</div>
+        </div>
+      </div>
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <div>
+          <span class="footer-brand-text">Wright Ideas</span>
+          <p class="footer-tagline">Unleash the Global Nomad Within.<br/>Conquer Currencies with eRate.</p>
+        </div>
+        <div>
+          <p class="footer-heading">Navigation</p>
+          <ul class="footer-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/about">About Us</a></li>
+            <li><a href="/products">Products</a></li>
+            <li><a href="/contact">Contact Us</a></li>
+          </ul>
+        </div>
+        <div>
+          <p class="footer-heading">Legal</p>
+          <ul class="footer-links">
+            <li><a href="/privacy">Privacy Policy</a></li>
+            <li><a href="/terms">Terms &amp; Conditions</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">© 2025 Wright Ideas. All rights reserved.</div>
+    </footer>
+
+  </div>
+
+  <style>
+    @keyframes spin1 { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+    @keyframes spin2 { from { transform: rotate(360deg); } to { transform: rotate(0deg); } }
+  </style>
+  <script>
+    document.getElementById('menuBtn').addEventListener('click', function() {
+      document.getElementById('mobileNav').classList.toggle('open');
+    });
+  </script>
+</body>
+</html>

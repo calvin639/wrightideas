@@ -11,7 +11,11 @@ yarn-error.log*
 .pnp/
 .pnp.js
 
-# Next.js build output (committed as static export — remove these if you want to exclude)
+# Next.js build cache (not the static export)
+.next/
+out/
+
+# Next.js static export (committed here — uncomment to exclude)
 # _next/
 
 # Environment variables

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wright Ideas</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <header>
+        <nav>
+            <ul>
+                <li><a href="#">Home</a></li>
+                <li><a href="#products">Products</a></li>
+                <li><a href="#about">About</a></li>
+                <li><a href="#contact">Contact</a></li>
+            </ul>
+        </nav>
+        <h1>Wright Ideas</h1>
+    </header>
+
+    <section id="banner"> 
+        <div class="slideshow-container">
+            <div class="mySlides fade">
+                <img src="image1.jpg" style="width:100%">
+                <div class="text">Welcome to Wright Ideas!</div>
+            </div>
+
+            <div class="mySlides fade">
+                <img src="image2.jpg" style="width:100%">
+                <div class="text">Experience the Future of Smart Apps.</div>
+            </div>
+
+            <div class="mySlides fade">
+                <img src="image3.jpg" style="width:100%">
+                <div class="text">Making Everyday Life Easier.</div>
+            </div>
+        </div>
+        <br>
+
+        <div style="text-align:center">
+            <span class="dot" onclick="currentSlide(1)"></span> 
+            <span class="dot" onclick="currentSlide(2)"></span> 
+            <span class="dot" onclick="currentSlide(3)"></span> 
+        </div>
+    </section>
+
+    <section id="products">
+        <h2>Our Products</h2>
+        <ul>
+            <li>e-rate</li> 
+        </ul>
+        <p>More exciting products coming soon!</p>
+    </section>
+
+    <section id="about">
+        <h2>About Us</h2>
+        <p>Wright Ideas is a company dedicated to developing innovative smart apps and products to enhance everyday life. We strive to create user-friendly and intuitive solutions that seamlessly integrate into your daily routines.</p>
+    </section>
+
+    <section id="contact">
+        <h2>Contact Us</h2>
+        <form>
+            <label for="name">Name:</label><br>
+            <input type="text" id="name" name="name"><br>
+            <label for="email">Email:</label><br>
+            <input type="email" id="email" name="email"><br>
+            <label for="message">Message:</label><br>
+            <textarea id="message" name="message" rows="4"></textarea><br><br>
+            <input type="submit" value="Submit">
+        </form>
+    </section>
+
+    <footer>
+        <p>
+            &copy; Wright Ideas. All Rights Reserved.<br>
+            <a href="#">Terms and Conditions</a><br>
+            Headquarters: Dublin, Ireland
+        </p>
+    </footer>
+
+    <script src="script.js"></script>
+
+</body>
+</html>
