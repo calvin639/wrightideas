@@ -1,0 +1,45 @@
+# SAM CLI deployment configuration
+# Run `make deploy-guided` first time, then `make deploy` for updates
+
+version = 0.1
+
+[default]
+[default.global.parameters]
+stack_name = "memories-in-stone"
+
+[default.build.parameters]
+cached = true
+parallel = true
+
+[default.validate.parameters]
+lint = true
+
+# ── DEV ──────────────────────────────────────────────────────────────────────
+
+[dev]
+[dev.deploy.parameters]
+stack_name         = "memories-in-stone-dev"
+s3_bucket          = "aws-sam-cli-managed-default-samclisourcebucket"
+s3_prefix          = "memories-in-stone-dev"
+region             = "eu-west-1"
+confirm_changeset  = true
+capabilities       = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+parameter_overrides = [
+  "Environment=dev",
+  "FrontendUrl=http://localhost:3000"
+]
+
+# ── PROD ─────────────────────────────────────────────────────────────────────
+
+[prod]
+[prod.deploy.parameters]
+stack_name         = "memories-in-stone-prod"
+s3_bucket          = "aws-sam-cli-managed-default-samclisourcebucket"
+s3_prefix          = "memories-in-stone-prod"
+region             = "eu-west-1"
+confirm_changeset  = true
+capabilities       = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
+parameter_overrides = [
+  "Environment=prod",
+  "FrontendUrl=https://memories.wrightideas.co"
+]

@@ -1,0 +1,428 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Memories in Stone - Backend API
+  Handles orders, payments, file uploads, AI video generation, and montage building.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+    Description: Deployment environment
+
+  FrontendUrl:
+    Type: String
+    Default: https://memories.wrightideas.co
+    Description: Frontend URL for CORS and redirects
+
+  SesFromEmail:
+    Type: String
+    Default: orders@memories.wrightideas.co
+    Description: Verified SES sender email
+
+Globals:
+  Function:
+    Runtime: python3.12
+    Architectures: [x86_64]
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        ORDERS_TABLE: !Ref OrdersTable
+        UPLOADS_BUCKET: !Ref UploadsBucket
+        VIDEOS_BUCKET: !Ref VideosBucket
+        VIDEO_GENERATION_QUEUE_URL: !Ref VideoGenerationQueue
+        MONTAGE_QUEUE_URL: !Ref MontageQueue
+        FRONTEND_URL: !Ref FrontendUrl
+        SES_FROM_EMAIL: !Ref SesFromEmail
+        STRIPE_SECRET_KEY: !Sub '{{resolve:ssm:/memories/${Environment}/stripe-secret-key}}'
+        RUNWAY_API_KEY: !Sub '{{resolve:ssm:/memories/${Environment}/runway-api-key}}'
+        RUNWAY_WEBHOOK_URL: !Sub 'https://{{resolve:ssm:/memories/${Environment}/api-domain}}/webhooks/runway'
+    Layers:
+      - !Ref DependenciesLayer
+  Api:
+    Cors:
+      AllowOrigin: !Sub "'${FrontendUrl}'"
+      AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Requested-With'"
+      AllowMethods: "'GET,POST,OPTIONS'"
+
+# ─── RESOURCES ────────────────────────────────────────────────────────────────
+
+Resources:
+
+  # ── API GATEWAY ──────────────────────────────────────────────────────────────
+
+  MemoriesApi:
+    Type: AWS::Serverless::HttpApi
+    Properties:
+      StageName: !Ref Environment
+      CorsConfiguration:
+        AllowOrigins:
+          - !Ref FrontendUrl
+          - http://localhost:3000
+        AllowHeaders:
+          - Content-Type
+          - Authorization
+          - X-Requested-With
+        AllowMethods:
+          - GET
+          - POST
+          - OPTIONS
+        MaxAge: 86400
+
+  # ── LAMBDA LAYER (shared dependencies) ───────────────────────────────────────
+
+  DependenciesLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub 'memories-dependencies-${Environment}'
+      Description: Shared Python dependencies for Memories in Stone
+      ContentUri: layers/dependencies/
+      CompatibleRuntimes:
+        - python3.12
+      CompatibleArchitectures:
+        - x86_64
+      RetentionPolicy: Delete
+    Metadata:
+      BuildMethod: python3.12
+
+  # ── DYNAMODB TABLE ────────────────────────────────────────────────────────────
+
+  OrdersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub 'memories-orders-${Environment}'
+      BillingMode: PAY_PER_REQUEST
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: true
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: GSI1PK
+          AttributeType: S
+        - AttributeName: GSI1SK
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: GSI1
+          KeySchema:
+            - AttributeName: GSI1PK
+              KeyType: HASH
+            - AttributeName: GSI1SK
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+      Tags:
+        - Key: Project
+          Value: MemoriesInStone
+        - Key: Environment
+          Value: !Ref Environment
+
+  # ── S3 BUCKETS ────────────────────────────────────────────────────────────────
+
+  UploadsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'memories-uploads-${Environment}-${AWS::AccountId}'
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins:
+              - !Ref FrontendUrl
+              - http://localhost:3000
+            AllowedMethods: [GET, PUT, POST]
+            AllowedHeaders: ['*']
+            MaxAge: 3600
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteRawUploadsAfter30Days
+            Status: Enabled
+            ExpirationInDays: 30
+            Prefix: uploads/
+      Tags:
+        - Key: Project
+          Value: MemoriesInStone
+
+  VideosBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'memories-videos-${Environment}-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      Tags:
+        - Key: Project
+          Value: MemoriesInStone
+
+  VideosBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref VideosBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub 'arn:aws:s3:::${VideosBucket}/*'
+
+  # ── SQS QUEUES ────────────────────────────────────────────────────────────────
+
+  VideoGenerationDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'memories-video-gen-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600  # 14 days
+
+  VideoGenerationQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'memories-video-generation-${Environment}'
+      VisibilityTimeout: 600  # 10 min (must be >= 6x Lambda timeout)
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt VideoGenerationDLQ.Arn
+        maxReceiveCount: 3
+
+  MontageDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'memories-montage-dlq-${Environment}'
+      MessageRetentionPeriod: 1209600
+
+  MontageQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub 'memories-montage-${Environment}'
+      VisibilityTimeout: 1800  # 30 min (FFmpeg can take a while)
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt MontageDLQ.Arn
+        maxReceiveCount: 3
+
+  # ── SHARED IAM ROLE ───────────────────────────────────────────────────────────
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub 'memories-lambda-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: MemoriesLambdaPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !GetAtt OrdersTable.Arn
+                  - !Sub '${OrdersTable.Arn}/index/*'
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:GeneratePresignedUrl
+                Resource:
+                  - !Sub '${UploadsBucket.Arn}/*'
+                  - !Sub '${VideosBucket.Arn}/*'
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                Resource:
+                  - !GetAtt VideoGenerationQueue.Arn
+                  - !GetAtt MontageQueue.Arn
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/memories/${Environment}/*'
+
+  # ── API FUNCTIONS ─────────────────────────────────────────────────────────────
+
+  CreateOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-create-order-${Environment}'
+      CodeUri: src/
+      Handler: functions.create_order.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Create a new memorial stone order and generate S3 presigned upload URLs
+      Events:
+        CreateOrder:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MemoriesApi
+            Path: /orders
+            Method: POST
+
+  GetOrderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-get-order-${Environment}'
+      CodeUri: src/
+      Handler: functions.get_order.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Get order status and details
+      Events:
+        GetOrder:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MemoriesApi
+            Path: /orders/{order_id}
+            Method: GET
+
+  CreateCheckoutFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-create-checkout-${Environment}'
+      CodeUri: src/
+      Handler: functions.create_checkout.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Create a Stripe Checkout session for an order
+      Events:
+        CreateCheckout:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MemoriesApi
+            Path: /orders/{order_id}/checkout
+            Method: POST
+
+  StripeWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-stripe-webhook-${Environment}'
+      CodeUri: src/
+      Handler: functions.stripe_webhook.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Handle Stripe payment webhooks
+      Environment:
+        Variables:
+          STRIPE_WEBHOOK_SECRET: !Sub '{{resolve:ssm:/memories/${Environment}/stripe-webhook-secret}}'
+      Events:
+        StripeWebhook:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MemoriesApi
+            Path: /webhooks/stripe
+            Method: POST
+
+  RunwayWebhookFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-runway-webhook-${Environment}'
+      CodeUri: src/
+      Handler: functions.runway_webhook.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Handle Runway ML task completion webhooks
+      Events:
+        RunwayWebhook:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MemoriesApi
+            Path: /webhooks/runway
+            Method: POST
+
+  # ── PROCESSING FUNCTIONS ──────────────────────────────────────────────────────
+
+  VideoGeneratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-video-generator-${Environment}'
+      CodeUri: src/
+      Handler: functions.video_generator.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Submit files to Runway ML for image-to-video conversion
+      Timeout: 90
+      MemorySize: 512
+      Events:
+        VideoGenerationQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt VideoGenerationQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+  MontageBuilderFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-montage-builder-${Environment}'
+      CodeUri: src/
+      Handler: functions.montage_builder.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Stitch generated clips into final memorial video using FFmpeg
+      Timeout: 900   # 15 min max
+      MemorySize: 3008
+      EphemeralStorage:
+        Size: 5120   # 5GB /tmp for video processing
+      Layers:
+        - !Ref DependenciesLayer
+        # Add your FFmpeg layer ARN here after deployment:
+        # - arn:aws:lambda:eu-west-1:ACCOUNT_ID:layer:ffmpeg:1
+        # See README for instructions on building the FFmpeg layer
+      Events:
+        MontageQueue:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt MontageQueue.Arn
+            BatchSize: 1
+            FunctionResponseTypes:
+              - ReportBatchItemFailures
+
+# ── OUTPUTS ────────────────────────────────────────────────────────────────────
+
+Outputs:
+  ApiUrl:
+    Description: API Gateway base URL
+    Value: !Sub 'https://${MemoriesApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+    Export:
+      Name: !Sub 'memories-api-url-${Environment}'
+
+  UploadsBucketName:
+    Description: S3 bucket for customer uploads
+    Value: !Ref UploadsBucket
+
+  VideosBucketName:
+    Description: S3 bucket for processed videos
+    Value: !Ref VideosBucket
+
+  OrdersTableName:
+    Description: DynamoDB table name
+    Value: !Ref OrdersTable
+
+  VideoGenerationQueueUrl:
+    Description: SQS queue for video generation jobs
+    Value: !Ref VideoGenerationQueue
+
+  MontageQueueUrl:
+    Description: SQS queue for montage building jobs
+    Value: !Ref MontageQueue

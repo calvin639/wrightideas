@@ -1,0 +1,8 @@
+{
+  "httpMethod": "POST",
+  "path": "/orders",
+  "headers": {
+    "Content-Type": "application/json"
+  },
+  "body": "{\"customer_name\": \"Jane Murphy\", \"customer_email\": \"jane@example.com\", \"customer_phone\": \"+353871234567\", \"loved_one_name\": \"Michael Murphy\", \"loved_one_dob\": \"1945-03-12\", \"loved_one_dod\": \"2024-11-20\", \"stone_message\": \"Forever in our hearts\", \"stone_style\": \"black_slate\", \"stone_quantity\": 1, \"files\": [{\"filename\": \"photo1.jpg\", \"content_type\": \"image/jpeg\", \"caption\": \"Christmas 2022\"}, {\"filename\": \"photo2.jpg\", \"content_type\": \"image/jpeg\", \"caption\": \"Birthday celebration\"}, {\"filename\": \"video1.mp4\", \"content_type\": \"video/mp4\", \"caption\": \"Birthday speech\"}]}"
+}
