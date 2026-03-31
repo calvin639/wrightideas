@@ -945,7 +945,7 @@
 
         const createData = await createResp.json();
         wizardState.orderId = createData.order_id;
-        wizardState.uploadUrls = createData.upload_urls || [];
+        wizardState.uploadUrls = createData.files || createData.upload_urls || [];
 
         // ── Upload files to S3 presigned URLs ──
         document.getElementById('fileList').style.display = 'none';
