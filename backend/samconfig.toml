@@ -19,10 +19,10 @@ lint = true
 [dev]
 [dev.deploy.parameters]
 stack_name         = "memories-in-stone-dev"
-s3_bucket          = "aws-sam-cli-managed-default-samclisourcebucket"
+resolve_s3         = true
 s3_prefix          = "memories-in-stone-dev"
 region             = "eu-west-1"
-confirm_changeset  = true
+confirm_changeset  = false
 capabilities       = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
 parameter_overrides = [
   "Environment=dev",
@@ -34,7 +34,7 @@ parameter_overrides = [
 [prod]
 [prod.deploy.parameters]
 stack_name         = "memories-in-stone-prod"
-s3_bucket          = "aws-sam-cli-managed-default-samclisourcebucket"
+resolve_s3         = true
 s3_prefix          = "memories-in-stone-prod"
 region             = "eu-west-1"
 confirm_changeset  = true

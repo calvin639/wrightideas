@@ -20,15 +20,23 @@ from shared.db import get_order, set_order_stripe_session
 from shared.models import OrderStatus
 from shared.pricing import get_line_item_description
 from shared.response import ok, error, not_found, server_error
+from shared.secrets import get_stripe_key
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://memories.wrightideas.co")
 
 
+def _init_stripe():
+    """Lazy-init Stripe with runtime secret. Cached after first call."""
+    if not stripe.api_key:
+        stripe.api_key = get_stripe_key()
+
+
 def lambda_handler(event, context):
+    _init_stripe()
+
     order_id = (event.get("pathParameters") or {}).get("order_id")
     if not order_id:
         return not_found("Order")

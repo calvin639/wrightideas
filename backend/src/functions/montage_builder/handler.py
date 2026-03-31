@@ -26,7 +26,7 @@ import boto3
 import requests
 
 from shared.db import get_order, get_order_files, update_order_status
-from shared.models import OrderStatus, FileStatus
+from shared.models import OrderStatus, FileStatus, now_iso
 from shared.qr_utils import generate_and_upload_qr
 from shared.email_utils import send_video_ready
 
@@ -158,7 +158,6 @@ def _build_montage(order_id: str) -> None:
         qr_key, qr_url = generate_and_upload_qr(order_id)
 
         # ── 8. Mark order complete ─────────────────────────────────────────────
-        from shared.models import now_iso
         update_order_status(
             order_id,
             OrderStatus.COMPLETE,

@@ -32,15 +32,15 @@ validate:
 
 # ── DEPLOY ────────────────────────────────────────────────────────────────────
 deploy: build
-	sam deploy --config-env dev --no-confirm-changeset
+	@chmod +x scripts/deploy.sh && bash -i scripts/deploy.sh dev
 
 deploy-guided: build
-	sam deploy --guided --config-env dev
+	@chmod +x scripts/deploy.sh && bash -i scripts/deploy.sh dev
 
 deploy-prod: build
 	@echo "⚠️  Deploying to PRODUCTION. Press Ctrl+C to cancel."
 	@sleep 3
-	sam deploy --config-env prod
+	@chmod +x scripts/deploy.sh && bash -i scripts/deploy.sh prod
 
 # ── LOCAL DEV ─────────────────────────────────────────────────────────────────
 local-api: build

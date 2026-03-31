@@ -20,18 +20,20 @@ from shared.db import get_order, update_order_status
 from shared.models import OrderStatus
 from shared.email_utils import send_order_confirmation, send_admin_new_order
 from shared.response import ok, error, server_error
+from shared.secrets import get_stripe_key, get_stripe_webhook_secret
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-stripe.api_key = os.environ.get("STRIPE_SECRET_KEY")
-WEBHOOK_SECRET = os.environ.get("STRIPE_WEBHOOK_SECRET")
 VIDEO_QUEUE_URL = os.environ.get("VIDEO_GENERATION_QUEUE_URL")
-
 sqs = boto3.client("sqs")
 
 
 def lambda_handler(event, context):
+    # Init Stripe with runtime secret
+    stripe.api_key = get_stripe_key()
+    webhook_secret = get_stripe_webhook_secret()
+
     # Stripe sends raw body — API Gateway may base64-encode it
     payload = event.get("body") or ""
     if event.get("isBase64Encoded"):
@@ -43,7 +45,7 @@ def lambda_handler(event, context):
     # ── Verify Stripe signature ───────────────────────────────────────────────
     try:
         stripe_event = stripe.Webhook.construct_event(
-            payload, sig_header, WEBHOOK_SECRET
+            payload, sig_header, webhook_secret
         )
     except ValueError:
         logger.warning("Invalid Stripe payload")

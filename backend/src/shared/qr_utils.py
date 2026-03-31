@@ -14,6 +14,7 @@ s3 = boto3.client("s3")
 
 VIDEOS_BUCKET = os.environ.get("VIDEOS_BUCKET", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://memories.wrightideas.co")
+VIDEOS_CF_URL = os.environ.get("VIDEOS_CF_URL", "")
 
 
 def generate_and_upload_qr(order_id: str) -> tuple[str, str]:
@@ -52,6 +53,10 @@ def generate_and_upload_qr(order_id: str) -> tuple[str, str]:
         ContentType="image/png",
     )
 
-    public_url = f"https://{VIDEOS_BUCKET}.s3.eu-west-1.amazonaws.com/{s3_key}"
+    # Use CloudFront URL if configured, otherwise fall back to direct S3 URL
+    if VIDEOS_CF_URL:
+        public_url = f"{VIDEOS_CF_URL.rstrip('/')}/{s3_key}"
+    else:
+        public_url = f"https://{VIDEOS_BUCKET}.s3.eu-west-1.amazonaws.com/{s3_key}"
     logger.info(f"QR code uploaded: {public_url}")
     return s3_key, public_url

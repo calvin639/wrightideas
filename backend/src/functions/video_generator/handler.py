@@ -23,13 +23,12 @@ from shared.db import (
     update_file_status
 )
 from shared.models import OrderStatus, FileStatus
+from shared.secrets import get_runway_key, get_runway_webhook_url
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-RUNWAY_API_KEY = os.environ.get("RUNWAY_API_KEY")
 RUNWAY_API_BASE = "https://api.dev.runwayml.com/v1"
-RUNWAY_WEBHOOK_URL = os.environ.get("RUNWAY_WEBHOOK_URL")
 UPLOADS_BUCKET = os.environ.get("UPLOADS_BUCKET")
 
 s3 = boto3.client("s3")
@@ -121,11 +120,11 @@ def _submit_to_runway(file) -> str:
         "promptText": prompt,
         "duration": 5,                 # 5-second clip
         "ratio": "1280:720",           # 16:9 for video
-        "callbackUrl": RUNWAY_WEBHOOK_URL,
+        "callbackUrl": get_runway_webhook_url(),
     }
 
     headers = {
-        "Authorization": f"Bearer {RUNWAY_API_KEY}",
+        "Authorization": f"Bearer {get_runway_key()}",
         "Content-Type": "application/json",
         "X-Runway-Version": "2024-11-06",
     }
