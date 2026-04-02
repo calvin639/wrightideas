@@ -119,8 +119,8 @@ def _submit_to_runway(file) -> str:
         "promptImage": image_url,
         "promptText": prompt,
         "duration": 5,                 # 5-second clip
-        "ratio": "1280:720",           # 16:9 for video
-        "callbackUrl": get_runway_webhook_url(),
+        "ratio": "1280:768",           # landscape (Runway's closest to 16:9)
+        "webhookUrl": get_runway_webhook_url(),
     }
 
     headers = {

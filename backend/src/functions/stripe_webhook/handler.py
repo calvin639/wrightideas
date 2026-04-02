@@ -68,10 +68,20 @@ def lambda_handler(event, context):
     return ok({"received": True})
 
 
-def _handle_payment_success(session: dict) -> None:
-    """Process a successful Stripe Checkout payment."""
-    order_id = session.get("metadata", {}).get("order_id")
-    payment_intent = session.get("payment_intent", "")
+def _handle_payment_success(session) -> None:
+    """Process a successful Stripe Checkout payment.
+
+    session is a stripe.checkout.Session StripeObject (not a plain dict).
+    Newer Stripe SDK (v5+) uses attribute access; avoid .get() on StripeObjects.
+    """
+    metadata = getattr(session, "metadata", None) or {}
+    # metadata may be a StripeObject or a plain dict depending on SDK version
+    if isinstance(metadata, dict):
+        order_id = metadata.get("order_id")
+    else:
+        order_id = getattr(metadata, "order_id", None)
+
+    payment_intent = getattr(session, "payment_intent", "") or ""
 
     if not order_id:
         logger.error("checkout.session.completed missing order_id in metadata")

@@ -184,50 +184,72 @@ def _create_title_card(
     dod: str = "",
     duration: int = 5,
 ) -> None:
-    """Create a simple black title card with the name and dates."""
+    """
+    Create a title card video using Pillow for text rendering + FFmpeg for video.
+
+    We use Pillow instead of FFmpeg's drawtext filter because the bundled
+    imageio-ffmpeg binary is a minimal build without libfreetype support.
+    """
+    from PIL import Image, ImageDraw, ImageFont
+    import tempfile, os
+
+    W, H = 1280, 720
+    GOLD = (200, 168, 130)
+    WHITE = (255, 255, 255)
+    BG = (0, 0, 0)
+
+    img = Image.new("RGB", (W, H), BG)
+    draw = ImageDraw.Draw(img)
+
+    # Use default Pillow font (always available — no external font file needed)
+    try:
+        font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)
+        font_med   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+    except OSError:
+        # Lambda may not have DejaVu — fall back to PIL default bitmap font
+        font_large = ImageFont.load_default()
+        font_med   = font_large
+        font_small = font_large
+
     dates_line = ""
     if dob and dod:
         dates_line = f"{_format_date(dob)} — {_format_date(dod)}"
     elif dod:
         dates_line = _format_date(dod)
 
-    # Escape special characters for FFmpeg drawtext
-    name_escaped = loved_one_name.replace("'", "\\'").replace(":", "\\:")
-    dates_escaped = dates_line.replace("'", "\\'").replace(":", "\\:") if dates_line else ""
+    def centred_text(draw, text, font, y, color):
+        bbox = draw.textbbox((0, 0), text, font=font)
+        w = bbox[2] - bbox[0]
+        draw.text(((W - w) / 2, y), text, font=font, fill=color)
 
-    if dates_escaped:
-        filter_str = (
-            f"color=c=black:s=1280x720:d={duration}[base];"
-            f"[base]drawtext=text='In Loving Memory of':"
-            f"fontsize=36:fontcolor=0xC8A882:x=(w-text_w)/2:y=(h/2-80):"
-            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSerifCondensed.ttf[t1];"
-            f"[t1]drawtext=text='{name_escaped}':"
-            f"fontsize=52:fontcolor=white:x=(w-text_w)/2:y=(h/2-20):"
-            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSerifCondensed.ttf[t2];"
-            f"[t2]drawtext=text='{dates_escaped}':"
-            f"fontsize=28:fontcolor=0xC8A882:x=(w-text_w)/2:y=(h/2+60):"
-            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSerifCondensed.ttf,"
-            f"fade=t=in:st=0:d=1,fade=t=out:st={duration-1}:d=1"
-        )
+    if dates_line:
+        centred_text(draw, "In Loving Memory of", font_med,   H // 2 - 90, GOLD)
+        centred_text(draw, loved_one_name,         font_large, H // 2 - 30, WHITE)
+        centred_text(draw, dates_line,             font_small, H // 2 + 50, GOLD)
     else:
-        filter_str = (
-            f"color=c=black:s=1280x720:d={duration}[base];"
-            f"[base]drawtext=text='In Loving Memory of':"
-            f"fontsize=36:fontcolor=0xC8A882:x=(w-text_w)/2:y=(h/2-50):"
-            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSerifCondensed.ttf[t1];"
-            f"[t1]drawtext=text='{name_escaped}':"
-            f"fontsize=52:fontcolor=white:x=(w-text_w)/2:y=(h/2+20):"
-            f"fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSerifCondensed.ttf,"
-            f"fade=t=in:st=0:d=1,fade=t=out:st={duration-1}:d=1"
-        )
+        centred_text(draw, "In Loving Memory of", font_med,   H // 2 - 60, GOLD)
+        centred_text(draw, loved_one_name,         font_large, H // 2 + 10, WHITE)
+
+    # Save PNG to temp file, then convert to video with FFmpeg
+    png_path = output_path.replace(".mp4", "_title.png")
+    img.save(png_path)
 
     _run_ffmpeg([
-        "-filter_complex", filter_str,
+        "-loop", "1",
+        "-i", png_path,
+        "-vf", f"fade=t=in:st=0:d=1,fade=t=out:st={duration - 1}:d=1",
         "-t", str(duration),
         "-r", "24",
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-pix_fmt", "yuv420p",
         output_path,
     ])
+
+    try:
+        os.remove(png_path)
+    except OSError:
+        pass
 
 
 def _normalise_clip(input_path: str, output_path: str) -> None:
@@ -271,9 +293,18 @@ def _get_background_music(tmp: Path) -> Path | None:
     return None
 
 
+def _get_ffmpeg() -> str:
+    """Return path to FFmpeg binary — bundled via imageio-ffmpeg in Lambda layer."""
+    try:
+        import imageio_ffmpeg
+        return imageio_ffmpeg.get_ffmpeg_exe()
+    except Exception:
+        return "ffmpeg"  # fallback for local dev
+
+
 def _run_ffmpeg(args: list) -> None:
     """Run an FFmpeg command, raising on failure."""
-    cmd = ["ffmpeg", "-y", "-loglevel", "error"] + args
+    cmd = [_get_ffmpeg(), "-y", "-loglevel", "error"] + args
     logger.debug(f"FFmpeg: {' '.join(cmd)}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:

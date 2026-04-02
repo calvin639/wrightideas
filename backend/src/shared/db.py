@@ -125,6 +125,14 @@ def update_file_status(
         update_expr += f", {key} = :{key}"
         expr_attrs[f":{key}"] = value
 
+    # Keep GSI1 in sync when a Runway task ID is assigned
+    # so get_file_by_runway_task() can look up files by task ID
+    if "runway_task_id" in extra_fields and extra_fields["runway_task_id"]:
+        task_id = extra_fields["runway_task_id"]
+        update_expr += ", GSI1PK = :gsi1pk, GSI1SK = :gsi1sk"
+        expr_attrs[":gsi1pk"] = f"RUNWAY#{task_id}"
+        expr_attrs[":gsi1sk"] = f"FILE#{file_id}"
+
     get_table().update_item(
         Key={"PK": f"ORDER#{order_id}", "SK": f"FILE#{file_id}"},
         UpdateExpression=update_expr,
