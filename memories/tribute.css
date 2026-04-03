@@ -1,0 +1,371 @@
+/* ============================================================
+   MEMORIES IN STONE — TRIBUTE PAGE
+   Warm, minimal, emotional — a living memorial
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600&display=swap');
+
+/* ---- Variables (mirror memories.css) ---- */
+:root {
+  --bg:          #faf9f7;
+  --bg-alt:      #f3f0ec;
+  --bg-card:     #ffffff;
+  --text:        #2c2a28;
+  --text-mid:    #5a5550;
+  --text-light:  #8c8680;
+  --stone:       #7a6652;
+  --stone-mid:   #a3927e;
+  --stone-light: #d4c7b8;
+  --border:      #e4ddd6;
+  --accent:      #5c7a52;
+  --shadow-sm:   0 1px 4px rgba(44,42,40,.06);
+  --shadow-md:   0 4px 20px rgba(44,42,40,.10);
+  --shadow-lg:   0 12px 40px rgba(44,42,40,.14);
+  --radius:      14px;
+}
+
+/* ---- Reset ---- */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+html { scroll-behavior: smooth; }
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  background-color: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  overflow-x: hidden;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Page ---- */
+.page-wrapper {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ---- Header ---- */
+.tribute-header {
+  padding: 1.25rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  background: rgba(250,249,247,0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+.tribute-header-inner {
+  max-width: 820px;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.brand {
+  text-decoration: none;
+  display: flex;
+  align-items: baseline;
+  gap: 0.35rem;
+}
+.brand-stone {
+  font-family: 'Lora', Georgia, serif;
+  font-size: 1.15rem;
+  font-weight: 600;
+  color: var(--stone);
+  letter-spacing: -0.2px;
+}
+.brand-sub {
+  font-family: 'Inter', sans-serif;
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--text-light);
+  letter-spacing: 0.3px;
+}
+
+/* ---- Loading State ---- */
+.loading-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 1.5rem;
+  gap: 1.25rem;
+  text-align: center;
+}
+.loading-stone {
+  width: 56px;
+  height: 64px;
+  background: linear-gradient(145deg, #d4c4b0, #c8b89e, #b8a88e);
+  border-radius: 40% 44% 52% 36% / 38% 40% 46% 44%;
+  animation: breathe 2.4s ease-in-out infinite;
+  box-shadow: var(--shadow-md);
+}
+@keyframes breathe {
+  0%, 100% { transform: scale(1); opacity: 0.7; }
+  50%       { transform: scale(1.06); opacity: 1; }
+}
+.loading-text {
+  font-family: 'Lora', Georgia, serif;
+  font-size: 1rem;
+  font-style: italic;
+  color: var(--text-light);
+}
+
+/* ---- Error State ---- */
+.error-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem 1.5rem;
+  gap: 1rem;
+  text-align: center;
+  max-width: 480px;
+  margin: 0 auto;
+}
+.error-icon {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--stone-mid);
+}
+.error-title {
+  font-family: 'Lora', Georgia, serif;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text);
+}
+.error-desc {
+  font-size: 0.95rem;
+  color: var(--text-mid);
+  line-height: 1.7;
+}
+.btn-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.75rem 1.6rem;
+  background: var(--stone);
+  color: #fff;
+  font-weight: 600;
+  font-size: 0.88rem;
+  border-radius: 10px;
+  text-decoration: none;
+  transition: background 0.2s, transform 0.2s;
+  margin-top: 0.5rem;
+}
+.btn-back:hover { background: #6b5848; transform: translateY(-1px); }
+
+/* ---- Tribute Content ---- */
+.tribute-content {
+  flex: 1;
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 3rem 1.5rem 5rem;
+  width: 100%;
+}
+
+/* ── Hero Banner ── */
+.tribute-banner {
+  text-align: center;
+  padding: 3.5rem 2rem 3rem;
+  margin-bottom: 3rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * 1.5);
+  box-shadow: var(--shadow-sm);
+  position: relative;
+  overflow: hidden;
+}
+.tribute-banner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(160deg, rgba(212,199,184,0.18) 0%, transparent 60%);
+  pointer-events: none;
+}
+.tribute-eyebrow {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 1.4px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: 1.25rem;
+}
+.tribute-name {
+  font-family: 'Lora', Georgia, serif;
+  font-size: clamp(2.2rem, 6vw, 3.4rem);
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.15;
+  letter-spacing: -0.3px;
+  margin-bottom: 1rem;
+}
+.tribute-dates {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  font-family: 'Lora', Georgia, serif;
+  font-size: 1.05rem;
+  font-style: italic;
+  color: var(--stone-mid);
+  flex-wrap: wrap;
+}
+.dates-separator {
+  width: 32px;
+  height: 1px;
+  background: var(--stone-light);
+  display: inline-block;
+  flex-shrink: 0;
+}
+
+/* ── Stone Message ── */
+.tribute-message-section {
+  margin-bottom: 2.5rem;
+}
+.tribute-section-label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--text-light);
+  margin-bottom: 0.85rem;
+}
+.tribute-message {
+  font-family: 'Lora', Georgia, serif;
+  font-size: clamp(1.1rem, 2.5vw, 1.35rem);
+  font-style: italic;
+  color: var(--stone);
+  line-height: 1.65;
+  padding: 1.75rem 2rem;
+  background: var(--bg-alt);
+  border-left: 3px solid var(--stone-light);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+/* ── Video Player ── */
+.tribute-video-section {
+  margin-bottom: 2.5rem;
+}
+.tribute-video-wrap {
+  position: relative;
+  width: 100%;
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #1a1714;
+  box-shadow: var(--shadow-lg);
+  aspect-ratio: 16 / 9;
+}
+.tribute-video {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+}
+.video-not-ready {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 3rem 2rem;
+  text-align: center;
+  background: var(--bg-alt);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  aspect-ratio: 16 / 9;
+}
+.video-not-ready-icon {
+  color: var(--stone-light);
+}
+.video-not-ready p {
+  font-family: 'Lora', Georgia, serif;
+  font-size: 1rem;
+  font-style: italic;
+  color: var(--text-light);
+}
+.video-not-ready small {
+  font-size: 0.82rem;
+  color: var(--text-light);
+}
+
+/* ── Divider ── */
+.tribute-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 2.5rem 0;
+}
+
+/* ── Share / QR section ── */
+.tribute-footer-section {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.6rem;
+  padding: 1.5rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  text-align: center;
+  flex-wrap: wrap;
+}
+.tribute-footer-section svg {
+  color: var(--stone-light);
+  flex-shrink: 0;
+}
+.tribute-footer-section p {
+  font-size: 0.85rem;
+  color: var(--text-light);
+  font-style: italic;
+}
+
+/* ---- Footer ---- */
+.tribute-page-footer {
+  border-top: 1px solid var(--border);
+  padding: 1.5rem;
+  text-align: center;
+}
+.tribute-page-footer p {
+  font-size: 0.8rem;
+  color: var(--text-light);
+}
+.tribute-page-footer a {
+  color: var(--stone);
+  text-decoration: none;
+}
+.tribute-page-footer a:hover {
+  text-decoration: underline;
+}
+
+/* ---- Fade-in animation ---- */
+.fade-in {
+  opacity: 0;
+  transform: translateY(14px);
+  transition: opacity 0.55s ease, transform 0.55s ease;
+}
+.fade-in.visible { opacity: 1; transform: translateY(0); }
+.fade-delay-1 { transition-delay: 0.1s; }
+.fade-delay-2 { transition-delay: 0.2s; }
+.fade-delay-3 { transition-delay: 0.3s; }
+
+/* ---- Responsive ---- */
+@media (max-width: 600px) {
+  .tribute-content { padding: 2rem 1.25rem 4rem; }
+  .tribute-banner { padding: 2.5rem 1.25rem 2rem; margin-bottom: 2rem; }
+  .tribute-message { padding: 1.25rem 1.25rem 1.25rem 1.5rem; }
+  .tribute-dates { font-size: 0.95rem; }
+}
+
+/* ---- Scrollbar ---- */
+::-webkit-scrollbar { width: 7px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--stone-light); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--stone-mid); }
