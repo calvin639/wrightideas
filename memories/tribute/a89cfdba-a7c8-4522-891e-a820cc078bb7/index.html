@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Calvin Wright — Memories in Stone</title>
+  <meta name="description" content="A living memorial tribute page."/>
+  <link rel="icon" href="../../../favicon.ico" type="image/x-icon"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="../../tribute.css"/>
+  <style>
+    .demo-banner {
+      background: linear-gradient(135deg, #5c7a52, #4a6442);
+      color: #fff;
+      text-align: center;
+      padding: 0.75rem 1.5rem;
+      font-size: 0.875rem;
+      font-family: 'Inter', sans-serif;
+      font-weight: 500;
+      letter-spacing: 0.01em;
+    }
+    .demo-banner a {
+      color: #d4f0c8;
+      text-decoration: underline;
+      text-decoration-color: rgba(212,240,200,0.5);
+    }
+    .video-placeholder {
+      background: var(--bg-alt);
+      border: 1.5px dashed var(--stone-light);
+      border-radius: var(--radius);
+      padding: 3rem 2rem;
+      text-align: center;
+      color: var(--text-light);
+    }
+    .video-placeholder-icon {
+      margin-bottom: 1rem;
+      opacity: 0.5;
+    }
+    .video-placeholder p { font-size: 0.95rem; line-height: 1.7; }
+    .video-placeholder small { font-size: 0.8rem; color: var(--text-light); display: block; margin-top: 0.4rem; }
+  </style>
+</head>
+<body>
+
+  <!-- DEMO NOTICE -->
+  <div class="demo-banner">
+    🎉 Demo link — this is what your guests will see when they scan the memorial stone.
+    <br/>
+    <small style="opacity:0.85;">Live orders will show a personalised tribute with photos and memorial video.</small>
+  </div>
+
+  <div class="page-wrapper" id="pageWrapper">
+
+    <!-- HEADER -->
+    <header class="tribute-header">
+      <div class="tribute-header-inner">
+        <a class="brand" href="/">
+          <span class="brand-stone">Memories</span>
+          <span class="brand-sub">in Stone</span>
+        </a>
+        <span id="headerSubtitle" style="font-size:0.82rem;color:var(--text-light);font-family:'Lora',serif;font-style:italic;">Calvin Wright</span>
+      </div>
+    </header>
+
+    <!-- TRIBUTE CONTENT -->
+    <main class="tribute-content" style="display:block;" aria-live="polite">
+
+      <!-- Banner: name + dates -->
+      <section class="tribute-banner fade-in visible" id="tributeBanner">
+        <p class="tribute-eyebrow">In Loving Memory</p>
+        <h1 class="tribute-name" id="tributeName">Calvin Wright</h1>
+        <div class="tribute-dates" id="tributeDates">
+          <span id="tributeDob">1 March 2026</span>
+          <span class="dates-separator" aria-hidden="true"></span>
+          <span id="tributeDod">31 March 2026</span>
+        </div>
+      </section>
+
+      <!-- Stone message -->
+      <div class="tribute-message-section fade-in fade-delay-1 visible">
+        <p class="tribute-section-label">Words on the stone</p>
+        <blockquote class="tribute-message">Love Calvin</blockquote>
+      </div>
+
+      <!-- Memorial video placeholder -->
+      <div class="tribute-video-section fade-in fade-delay-2 visible" id="tributeVideoSection">
+        <p class="tribute-section-label">Memorial Video</p>
+        <div class="video-placeholder">
+          <div class="video-placeholder-icon" aria-hidden="true">
+            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" opacity="0.35"/>
+            </svg>
+          </div>
+          <p>A beautiful memorial video will play here.</p>
+          <small>Created from your family's photos and memories, set to gentle music.</small>
+        </div>
+      </div>
+
+      <div class="tribute-divider" aria-hidden="true"></div>
+
+      <!-- Footer note -->
+      <div class="tribute-footer-section fade-in fade-delay-3 visible" aria-label="About this tribute">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/>
+        </svg>
+        <p>This tribute is hosted by <a href="/" style="color:var(--stone);text-decoration:none;">Memories in Stone</a> — a living memorial, always within reach.</p>
+      </div>
+
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="tribute-page-footer">
+      <p>&copy; 2026 <a href="/">Wright Ideas</a> · <a href="/">Memories in Stone</a></p>
+    </footer>
+
+  </div>
+
+</body>
+</html>
