@@ -43,4 +43,3 @@ parameter_overrides = [
   "Environment=prod",
   "FrontendUrl=https://memories.wrightideas.biz"
 ]
-# AcmCertificateArn is injected at deploy time from $ACM_CERT_ARN env var (see scripts/deploy.sh)

@@ -29,23 +29,6 @@ STRIPE_KEY="${STRIPE_SECRET_KEY:-$STRIPE_SANDBOX_KEY}"
 WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-whsec_placeholder_update_after_deploy}"
 RUNWAY_URL="${RUNWAY_WEBHOOK_URL:-https://placeholder/webhooks/runway}"
 
-# For prod, require an ACM certificate ARN (must be in us-east-1) for the
-# memories.wrightideas.biz CloudFront alias. Run `make request-cert` to provision it.
-CERT_OVERRIDE=""
-if [ "$ENV" = "prod" ]; then
-  if [ -z "$ACM_CERT_ARN" ]; then
-    echo "⚠️  ACM_CERT_ARN not set — deploying without custom domain alias."
-    echo "   CloudFront will use its default *.cloudfront.net domain until you:"
-    echo "   1. Run: make request-cert"
-    echo "   2. Add the validation CNAME to Cloudflare"
-    echo "   3. Run: make wait-cert"
-    echo "   4. Add ACM_CERT_ARN to ~/.zshrc and re-run: make deploy-prod"
-    echo ""
-  else
-    CERT_OVERRIDE="AcmCertificateArn=$ACM_CERT_ARN"
-    echo "   ACM cert:     ${ACM_CERT_ARN##*/}"
-  fi
-fi
 
 echo "🚀 Deploying to environment: $ENV"
 echo "   Stripe key:   ${STRIPE_KEY:0:10}..."
@@ -60,7 +43,6 @@ sam deploy \
     "RunwayApiKey=$RUNWAY_AI_KEY" \
     "StripeWebhookSecret=$WEBHOOK_SECRET" \
     "RunwayWebhookUrl=$RUNWAY_URL" \
-    ${CERT_OVERRIDE:+"$CERT_OVERRIDE"} \
   2>&1
 
 echo ""

@@ -1,4 +1,4 @@
-.PHONY: build deploy deploy-guided deploy-prod validate local-api setup-secrets clean logs help request-cert cert-dns wait-cert
+.PHONY: build deploy deploy-guided deploy-prod validate local-api setup-secrets clean logs help
 
 # ── CONFIG ────────────────────────────────────────────────────────────────────
 STACK_DEV    = memories-in-stone-dev
@@ -18,9 +18,6 @@ help:
 	@echo "  make validate        Lint and validate the SAM template"
 	@echo "  make local-api       Run API locally on port 3001"
 	@echo "  make setup-secrets   Store all required SSM secrets (interactive)"
-	@echo "  make request-cert    Request ACM cert for memories.wrightideas.biz (run once)"
-	@echo "  make cert-dns        Print the Cloudflare DNS validation record"
-	@echo "  make wait-cert       Wait until the ACM cert is validated and ready"
 	@echo "  make logs fn=<name>  Tail CloudWatch logs for a function"
 	@echo "  make clean           Remove build artifacts"
 	@echo ""
@@ -52,55 +49,6 @@ local-api: build
 local-invoke:
 	@test -n "$(fn)" || (echo "Usage: make local-invoke fn=FunctionName event=events/file.json" && exit 1)
 	sam local invoke $(fn) --event $(event) --env-vars env.local.json
-
-# ── ACM CERTIFICATE (memories.wrightideas.biz — run once before first prod deploy) ──
-
-# Request the cert and print the ARN to add to ~/.bashrc as ACM_CERT_ARN
-request-cert:
-	@echo "Checking for existing ACM certificate for memories.wrightideas.biz..."
-	@EXISTING=$$(aws acm list-certificates --region us-east-1 \
-	  --query "CertificateSummaryList[?DomainName=='memories.wrightideas.biz'].CertificateArn" \
-	  --output text); \
-	if [ -n "$$EXISTING" ]; then \
-	  echo "✅ Certificate already exists: $$EXISTING"; \
-	  echo ""; \
-	  echo "Add to ~/.bashrc if not already there:"; \
-	  echo "  export ACM_CERT_ARN=$$EXISTING"; \
-	else \
-	  ARN=$$(aws acm request-certificate \
-	    --domain-name memories.wrightideas.biz \
-	    --validation-method DNS \
-	    --region us-east-1 \
-	    --query CertificateArn --output text); \
-	  echo "✅ Certificate requested: $$ARN"; \
-	  echo ""; \
-	  echo "Add to ~/.bashrc:"; \
-	  echo "  export ACM_CERT_ARN=$$ARN"; \
-	  echo ""; \
-	  echo "Then run:  make cert-dns   to get the Cloudflare validation record"; \
-	fi
-
-# Print the CNAME record to add to Cloudflare for DNS validation
-cert-dns:
-	@test -n "$(ACM_CERT_ARN)" || (echo "❌ ACM_CERT_ARN not set. Run 'make request-cert' first." && exit 1)
-	@echo "Add this CNAME to Cloudflare (DNS only — grey cloud):"
-	@echo ""
-	@aws acm describe-certificate \
-	  --certificate-arn $(ACM_CERT_ARN) \
-	  --region us-east-1 \
-	  --query 'Certificate.DomainValidationOptions[0].ResourceRecord' \
-	  --output table
-	@echo ""
-	@echo "Once added, run:  make wait-cert"
-
-# Block until ACM marks the cert as ISSUED
-wait-cert:
-	@test -n "$(ACM_CERT_ARN)" || (echo "❌ ACM_CERT_ARN not set. Run 'make request-cert' first." && exit 1)
-	@echo "Waiting for certificate to be validated (may take 1-2 min after adding the CNAME)..."
-	@aws acm wait certificate-validated \
-	  --certificate-arn $(ACM_CERT_ARN) \
-	  --region us-east-1
-	@echo "✅ Certificate validated — ready to deploy-prod"
 
 # ── SECRETS SETUP ─────────────────────────────────────────────────────────────
 # Run this once to store secrets in AWS SSM Parameter Store

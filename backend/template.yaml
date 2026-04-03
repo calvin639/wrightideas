@@ -42,16 +42,6 @@ Parameters:
     Default: https://placeholder/webhooks/runway
     Description: Full URL for Runway ML callbacks (update after first deploy)
 
-  AcmCertificateArn:
-    Type: String
-    Default: ''
-    Description: >
-      ARN of an ACM certificate in us-east-1 covering memories.wrightideas.biz.
-      Required for the custom CloudFront domain. Leave blank for dev (uses *.cloudfront.net).
-
-Conditions:
-  HasCustomDomain: !Not [!Equals [!Ref AcmCertificateArn, '']]
-
 Globals:
   Function:
     Runtime: python3.12
@@ -235,16 +225,6 @@ Resources:
         Enabled: true
         HttpVersion: http2
         PriceClass: PriceClass_100
-        Aliases: !If
-          - HasCustomDomain
-          - - memories.wrightideas.biz
-          - !Ref AWS::NoValue
-        ViewerCertificate: !If
-          - HasCustomDomain
-          - AcmCertificateArn: !Ref AcmCertificateArn
-            SslSupportMethod: sni-only
-            MinimumProtocolVersion: TLSv1.2_2021
-          - CloudFrontDefaultCertificate: true
         DefaultCacheBehavior:
           TargetOriginId: VideosBucketOrigin
           ViewerProtocolPolicy: redirect-to-https
