@@ -41,5 +41,6 @@ confirm_changeset  = true
 capabilities       = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
 parameter_overrides = [
   "Environment=prod",
-  "FrontendUrl=https://memories.wrightideas.co"
+  "FrontendUrl=https://memories.wrightideas.biz"
 ]
+# AcmCertificateArn is injected at deploy time from $ACM_CERT_ARN env var (see scripts/deploy.sh)
