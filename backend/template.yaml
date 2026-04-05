@@ -18,8 +18,8 @@ Parameters:
 
   SesFromEmail:
     Type: String
-    Default: orders@memories.wrightideas.biz
-    Description: Verified SES sender email
+    Default: noreply@wrightideas.biz
+    Description: Verified SES sender email (domain must be verified in SES)
 
   StripeSecretKey:
     Type: String
@@ -150,6 +150,15 @@ Resources:
           Value: MemoriesInStone
         - Key: Environment
           Value: !Ref Environment
+
+  # ── SES DOMAIN IDENTITY ───────────────────────────────────────────────────────
+
+  SesEmailIdentity:
+    Type: AWS::SES::EmailIdentity
+    Properties:
+      EmailIdentity: wrightideas.biz
+      DkimAttributes:
+        SigningEnabled: true
 
   # ── S3 BUCKETS ────────────────────────────────────────────────────────────────
 
@@ -496,3 +505,15 @@ Outputs:
     Value: !Sub 'https://${VideosCloudFrontDistribution.DomainName}'
     Export:
       Name: !Sub 'memories-videos-cf-url-${Environment}'
+
+  SesDkimRecord1:
+    Description: DKIM CNAME to add to Cloudflare (record 1 of 3)
+    Value: !Sub '${SesEmailIdentity.DkimDNSTokenName1}.wrightideas.biz -> ${SesEmailIdentity.DkimDNSTokenValue1}.dkim.amazonses.com'
+
+  SesDkimRecord2:
+    Description: DKIM CNAME to add to Cloudflare (record 2 of 3)
+    Value: !Sub '${SesEmailIdentity.DkimDNSTokenName2}.wrightideas.biz -> ${SesEmailIdentity.DkimDNSTokenValue2}.dkim.amazonses.com'
+
+  SesDkimRecord3:
+    Description: DKIM CNAME to add to Cloudflare (record 3 of 3)
+    Value: !Sub '${SesEmailIdentity.DkimDNSTokenName3}.wrightideas.biz -> ${SesEmailIdentity.DkimDNSTokenValue3}.dkim.amazonses.com'

@@ -8,7 +8,7 @@ import logging
 logger = logging.getLogger(__name__)
 ses = boto3.client("ses", region_name="eu-west-1")
 
-FROM_EMAIL = os.environ.get("SES_FROM_EMAIL", "orders@memories.wrightideas.co")
+FROM_EMAIL = os.environ.get("SES_FROM_EMAIL", "noreply@wrightideas.biz")
 
 
 def send_order_confirmation(order) -> None:
