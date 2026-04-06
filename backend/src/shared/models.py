@@ -84,6 +84,8 @@ class Order:
     video_s3_key: str = ""
     qr_code_url: str = ""
     qr_code_s3_key: str = ""
+    qr_svg_url: str = ""
+    qr_svg_s3_key: str = ""
     tribute_page_url: str = ""
 
     # Meta

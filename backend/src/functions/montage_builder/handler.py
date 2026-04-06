@@ -155,7 +155,7 @@ def _build_montage(order_id: str) -> None:
         # ── 7. Generate QR code ───────────────────────────────────────────────
         logger.info("Generating QR code…")
         tribute_page_url = f"{FRONTEND_URL}/tribute/{order_id}"
-        qr_key, qr_url = generate_and_upload_qr(order_id)
+        qr_key, qr_url, qr_svg_key, qr_svg_url = generate_and_upload_qr(order_id)
 
         # ── 8. Mark order complete ─────────────────────────────────────────────
         update_order_status(
@@ -165,6 +165,8 @@ def _build_montage(order_id: str) -> None:
             video_s3_key=video_key,
             qr_code_url=qr_url,
             qr_code_s3_key=qr_key,
+            qr_svg_url=qr_svg_url,
+            qr_svg_s3_key=qr_svg_key,
             tribute_page_url=tribute_page_url,
             completed_at=now_iso(),
         )
