@@ -35,6 +35,9 @@ layers/dependencies/python/
 # Logs
 *.log
 
+# Local QR output
+qr_output/
+
 # Music/large assets (add your gentle_music.mp3 but don't commit it)
 src/functions/montage_builder/assets/*.mp3
 src/functions/montage_builder/assets/*.wav
