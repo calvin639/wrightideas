@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 RUNWAY_API_BASE = "https://api.dev.runwayml.com/v1"
+RUNWAY_MODEL = os.environ.get("RUNWAY_MODEL", "gen4.5")
 UPLOADS_BUCKET = os.environ.get("UPLOADS_BUCKET")
 
 s3 = boto3.client("s3")
@@ -115,11 +116,11 @@ def _submit_to_runway(file) -> str:
     prompt = _build_prompt(caption, file.content_type)
 
     payload = {
-        "model": "gen3a_turbo",       # Fastest model; use "gen3a" for higher quality
+        "model": RUNWAY_MODEL,
         "promptImage": image_url,
         "promptText": prompt,
         "duration": 5,                 # 5-second clip
-        "ratio": "1280:768",           # landscape (Runway's closest to 16:9)
+        "ratio": "1280:720",           # 16:9 landscape (gen4.5 valid values: 1280:720, 720:1280, 1104:832, 960:960, 832:1104, 1584:672)
         "webhookUrl": get_runway_webhook_url(),
     }
 

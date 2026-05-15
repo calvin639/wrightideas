@@ -3,6 +3,14 @@ Standard HTTP response helpers for Lambda + API Gateway.
 """
 import json
 import os
+from decimal import Decimal
+
+
+class _DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return int(obj) if obj % 1 == 0 else float(obj)
+        return super().default(obj)
 
 
 def _cors_headers() -> dict:
@@ -19,7 +27,7 @@ def ok(body: dict, status: int = 200) -> dict:
     return {
         "statusCode": status,
         "headers": _cors_headers(),
-        "body": json.dumps(body),
+        "body": json.dumps(body, cls=_DecimalEncoder),
     }
 
 
@@ -34,7 +42,7 @@ def error(message: str, status: int = 400, details: dict = None) -> dict:
     return {
         "statusCode": status,
         "headers": _cors_headers(),
-        "body": json.dumps(body),
+        "body": json.dumps(body, cls=_DecimalEncoder),
     }
 
 

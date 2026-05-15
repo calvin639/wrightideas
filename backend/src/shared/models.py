@@ -18,9 +18,17 @@ Single-table design:
 
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
+from decimal import Decimal
 from enum import Enum
 from typing import Optional
 import uuid
+
+
+def _coerce(v):
+    """Convert DynamoDB Decimal to int or float so json.dumps doesn't choke."""
+    if isinstance(v, Decimal):
+        return int(v) if v % 1 == 0 else float(v)
+    return v
 
 
 def now_iso() -> str:
@@ -106,9 +114,8 @@ class Order:
 
     @classmethod
     def from_dynamo(cls, item: dict) -> "Order":
-        # Strip DynamoDB keys
         skip = {"PK", "SK", "GSI1PK", "GSI1SK"}
-        data = {k: v for k, v in item.items() if k not in skip}
+        data = {k: _coerce(v) for k, v in item.items() if k not in skip}
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
@@ -154,5 +161,5 @@ class OrderFile:
     @classmethod
     def from_dynamo(cls, item: dict) -> "OrderFile":
         skip = {"PK", "SK", "GSI1PK", "GSI1SK"}
-        data = {k: v for k, v in item.items() if k not in skip}
+        data = {k: _coerce(v) for k, v in item.items() if k not in skip}
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})

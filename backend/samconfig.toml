@@ -26,7 +26,9 @@ confirm_changeset  = false
 capabilities       = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
 parameter_overrides = [
   "Environment=dev",
-  "FrontendUrl=http://localhost:3000"
+  "FrontendUrl=https://memories.wrightideas.biz",
+  "RunwayWebhookUrl=https://621yr9lwh0.execute-api.eu-west-1.amazonaws.com/dev/webhooks/runway",
+  "RunwayModel=gen3a_turbo"
 ]
 
 # ── PROD ─────────────────────────────────────────────────────────────────────

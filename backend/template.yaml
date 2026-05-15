@@ -42,6 +42,11 @@ Parameters:
     Default: https://placeholder/webhooks/runway
     Description: Full URL for Runway ML callbacks (update after first deploy)
 
+  RunwayModel:
+    Type: String
+    Default: gen4.5
+    Description: "Runway ML model for image-to-video generation (gen4.5, gen4_turbo, gen3a_turbo, veo3.1, veo3.1_fast, veo3)"
+
 Globals:
   Function:
     Runtime: python3.12
@@ -64,6 +69,7 @@ Globals:
         RUNWAY_API_KEY: !Ref RunwayApiKey
         STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
         RUNWAY_WEBHOOK_URL: !Ref RunwayWebhookUrl
+        RUNWAY_MODEL: !Ref RunwayModel
     Layers:
       - !Ref DependenciesLayer
   Api:
@@ -470,6 +476,16 @@ Resources:
             BatchSize: 1
             FunctionResponseTypes:
               - ReportBatchItemFailures
+
+  RunwayPollerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-runway-poller-${Environment}'
+      CodeUri: src/
+      Handler: functions.runway_poller.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Poll Runway ML for missed webhook callbacks (invoke manually or via EventBridge)
+      Timeout: 120
 
 # ── OUTPUTS ────────────────────────────────────────────────────────────────────
 

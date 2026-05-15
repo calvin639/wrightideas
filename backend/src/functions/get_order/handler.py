@@ -24,12 +24,29 @@ Response:
 """
 
 import logging
+import os
 from shared.db import get_order, get_order_files
 from shared.models import OrderStatus, FileStatus
 from shared.response import ok, not_found, server_error
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
+
+VIDEOS_BUCKET  = os.environ.get("VIDEOS_BUCKET", "")
+VIDEOS_CF_URL  = os.environ.get("VIDEOS_CF_URL", "").rstrip("/")
+
+
+def _cf_video_url(raw_url: str) -> str:
+    """Rewrite a direct S3 video URL to CloudFront. No-op if already CF or env vars missing."""
+    if not raw_url or not VIDEOS_BUCKET or not VIDEOS_CF_URL:
+        return raw_url
+    s3_prefix = f"https://{VIDEOS_BUCKET}.s3.eu-west-1.amazonaws.com/"
+    if raw_url.startswith(s3_prefix):
+        key = raw_url[len(s3_prefix):]
+        cf_url = f"{VIDEOS_CF_URL}/{key}"
+        logger.info(f"Rewrote S3 URL to CloudFront: {cf_url}")
+        return cf_url
+    return raw_url
 
 STATUS_LABELS = {
     OrderStatus.PENDING_UPLOAD:  "Waiting for files to upload…",
@@ -54,22 +71,29 @@ STATUS_PROGRESS = {
 
 def lambda_handler(event, context):
     order_id = (event.get("pathParameters") or {}).get("order_id")
+    logger.info(f"GET /orders/{order_id}")
+
     if not order_id:
+        logger.warning("Missing order_id in pathParameters")
         return not_found("Order")
 
     try:
         order = get_order(order_id)
     except Exception as e:
-        logger.error(f"DB error fetching order {order_id}: {e}")
+        logger.error(f"DB error fetching order {order_id}: {e}", exc_info=True)
         return server_error()
 
     if not order:
+        logger.info(f"Order not found: {order_id}")
         return not_found("Order")
+
+    logger.info(f"Order {order_id} found: status={order.status} amount_cents={order.total_amount_cents!r} (type={type(order.total_amount_cents).__name__}) qty={order.stone_quantity!r} (type={type(order.stone_quantity).__name__})")
 
     # Get file statuses
     files = []
     try:
         order_files = get_order_files(order_id)
+        logger.info(f"Order {order_id} has {len(order_files)} file(s)")
         files = [
             {
                 "file_id": f.file_id,
@@ -81,7 +105,7 @@ def lambda_handler(event, context):
             for f in order_files
         ]
     except Exception as e:
-        logger.warning(f"Could not fetch files for order {order_id}: {e}")
+        logger.warning(f"Could not fetch files for order {order_id}: {e}", exc_info=True)
 
     # Calculate dynamic progress if PROCESSING
     progress = STATUS_PROGRESS.get(order.status, 0)
@@ -104,7 +128,7 @@ def lambda_handler(event, context):
         "stone_quantity": order.stone_quantity,
         "total_amount_euros": order.total_amount_cents / 100,
 
-        "video_url": order.video_url,
+        "video_url": _cf_video_url(order.video_url),
         "tribute_page_url": order.tribute_page_url,
         "qr_code_url": order.qr_code_url,
 

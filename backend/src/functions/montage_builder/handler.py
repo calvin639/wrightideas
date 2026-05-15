@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 VIDEOS_BUCKET = os.environ.get("VIDEOS_BUCKET", "")
+VIDEOS_CF_URL = os.environ.get("VIDEOS_CF_URL", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://memories.wrightideas.co")
 
 s3 = boto3.client("s3")
@@ -149,7 +150,15 @@ def _build_montage(order_id: str) -> None:
             video_key,
             ExtraArgs={"ContentType": "video/mp4"},
         )
-        video_url = f"https://{VIDEOS_BUCKET}.s3.eu-west-1.amazonaws.com/{video_key}"
+        # The videos bucket has all public access blocked and only allows reads
+        # via the CloudFront distribution (OAC). Always serve through CloudFront —
+        # a direct S3 URL will return 403.
+        if VIDEOS_CF_URL:
+            video_url = f"{VIDEOS_CF_URL.rstrip('/')}/{video_key}"
+        else:
+            # Fallback only for local/dev runs without the CF distribution wired up.
+            video_url = f"https://{VIDEOS_BUCKET}.s3.eu-west-1.amazonaws.com/{video_key}"
+            logger.warning("VIDEOS_CF_URL not set — falling back to direct S3 URL (will 403 in prod)")
         logger.info(f"Video uploaded: {video_url}")
 
         # ── 7. Generate QR code ───────────────────────────────────────────────

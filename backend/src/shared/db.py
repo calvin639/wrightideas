@@ -57,6 +57,15 @@ def update_order_status(order_id: str, status: str, **extra_fields) -> None:
     )
 
 
+def get_orders_by_status(status: str) -> List[Order]:
+    """Find all orders with a given status via GSI1."""
+    resp = get_table().query(
+        IndexName="GSI1",
+        KeyConditionExpression=Key("GSI1PK").eq(f"STATUS#{status}")
+    )
+    return [Order.from_dynamo(item) for item in resp.get("Items", [])]
+
+
 def get_order_by_stripe_session(stripe_session_id: str) -> Optional[Order]:
     """Find order via GSI by Stripe session ID (stored in GSI1 when set)."""
     # We scan for this — in production with high volume, add a dedicated GSI
