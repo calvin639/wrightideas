@@ -281,6 +281,87 @@
       .wizard-step-label { display: none; }
       .wizard-step-item + .wizard-step-item::before { width: 24px; }
     }
+
+    /* ── Product Preview ── */
+    .preview-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 2rem;
+      align-items: start;
+      margin-top: 3rem;
+    }
+    @media (max-width: 700px) { .preview-grid { grid-template-columns: 1fr; } }
+    .preview-media {
+      border-radius: var(--radius);
+      overflow: hidden;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.13);
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+    }
+    .preview-media img,
+    .preview-media video {
+      width: 100%;
+      display: block;
+      max-height: 380px;
+      object-fit: cover;
+    }
+    .preview-label {
+      padding: 1rem 1.25rem;
+      border-top: 1px solid var(--border);
+    }
+    .preview-label strong {
+      display: block;
+      font-size: 0.9rem;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 0.2rem;
+    }
+    .preview-label span {
+      font-size: 0.82rem;
+      color: var(--text-light);
+    }
+
+    /* ── Music Selector ── */
+    .music-options {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.75rem;
+      margin-top: 0.45rem;
+    }
+    .music-option { position: relative; }
+    .music-option input[type=radio] {
+      position: absolute; opacity: 0; pointer-events: none;
+    }
+    .music-option label {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 1rem 0.75rem;
+      background: var(--bg-card);
+      border: 1.5px solid var(--border);
+      border-radius: var(--radius);
+      cursor: pointer;
+      text-align: center;
+      transition: all 0.2s;
+    }
+    .music-option label:hover { border-color: var(--stone-mid); background: var(--bg-alt); }
+    .music-option input[type=radio]:checked + label {
+      border-color: var(--stone);
+      background: var(--bg-alt);
+    }
+    .music-option-icon { color: var(--stone-light); }
+    .music-option input[type=radio]:checked + label .music-option-icon { color: var(--stone); }
+    .music-option-name {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--text);
+    }
+    .music-option input[type=radio]:checked + label .music-option-name { color: var(--stone); }
+    .music-option-desc {
+      font-size: 0.75rem;
+      color: var(--text-light);
+    }
   </style>
 </head>
 <body>
@@ -409,6 +490,37 @@
               <div class="step-content">
                 <h3>Receive Your Stone</h3>
                 <p>Your handcrafted stone arrives engraved with a unique QR code. Place it wherever feels right — a garden, a shelf, a graveside.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div class="divider"></div>
+
+      <!-- TRIBUTE PREVIEW -->
+      <section class="section" id="tribute-preview">
+        <div class="section-inner">
+          <div class="section-header fade-in">
+            <p class="eyebrow">See the finished tribute</p>
+            <h2 class="section-title">What You'll Receive</h2>
+            <p class="section-desc">A handcrafted stone and a beautiful memorial video — made from the photos and moments you share with us.</p>
+          </div>
+          <div class="preview-grid fade-in">
+            <div class="preview-media">
+              <img src="media/unboxing.png" alt="Memories in Stone unboxing — handcrafted memorial stone"/>
+              <div class="preview-label">
+                <strong>Your Handcrafted Stone</strong>
+                <span>Individually shaped, engraved with a personal QR code and your message</span>
+              </div>
+            </div>
+            <div class="preview-media">
+              <video autoplay muted loop playsinline>
+                <source src="media/unboxing_vid.mp4" type="video/mp4"/>
+              </video>
+              <div class="preview-label">
+                <strong>Your Memorial Video</strong>
+                <span>A beautifully crafted tribute, created from the photos you upload</span>
               </div>
             </div>
           </div>
@@ -607,6 +719,52 @@
                 <div class="form-group" style="max-width:160px;">
                   <label class="form-label" for="stone_quantity">Quantity</label>
                   <input class="form-input" type="number" id="stone_quantity" name="stone_quantity" value="1" min="1" max="10"/>
+                </div>
+
+                <hr style="border:none;border-top:1px solid var(--border);margin:1.5rem 0;"/>
+                <p class="form-label" style="margin-bottom:0.3rem;font-size:0.9rem;color:var(--text-mid);">Music for the memorial video</p>
+                <p style="font-size:0.82rem;color:var(--text-light);margin-bottom:0.85rem;">Choose the soundtrack that plays over your loved one's tribute video. <span style="color:#b94040">*</span></p>
+                <div class="music-options" id="musicOptions">
+                  <div class="music-option">
+                    <input type="radio" name="music_choice" id="music_beautiful" value="beautiful"/>
+                    <label for="music_beautiful">
+                      <span class="music-option-icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                      </span>
+                      <span class="music-option-name">Beautiful</span>
+                      <span class="music-option-desc">Gentle &amp; uplifting</span>
+                    </label>
+                  </div>
+                  <div class="music-option">
+                    <input type="radio" name="music_choice" id="music_emotion" value="emotion"/>
+                    <label for="music_emotion">
+                      <span class="music-option-icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                      </span>
+                      <span class="music-option-name">Emotional</span>
+                      <span class="music-option-desc">Moving &amp; heartfelt</span>
+                    </label>
+                  </div>
+                  <div class="music-option">
+                    <input type="radio" name="music_choice" id="music_nature" value="nature"/>
+                    <label for="music_nature">
+                      <span class="music-option-icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M17 8C8 10 5.9 16.17 3.82 19.83A2 2 0 0 0 5.61 22.5C9.07 21.37 13.5 18.5 15 14c.5-1.5 1.5-3 2-4.5a6 6 0 0 0 0-1.5z"/><path d="M12 22 C12 12 6 8 2 8"/></svg>
+                      </span>
+                      <span class="music-option-name">Nature</span>
+                      <span class="music-option-desc">Calm &amp; serene</span>
+                    </label>
+                  </div>
+                  <div class="music-option">
+                    <input type="radio" name="music_choice" id="music_none" value="none"/>
+                    <label for="music_none">
+                      <span class="music-option-icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23M12 19v3M8 23h8"/></svg>
+                      </span>
+                      <span class="music-option-name">No music</span>
+                      <span class="music-option-desc">Silent montage</span>
+                    </label>
+                  </div>
                 </div>
 
                 <div class="wizard-actions">
@@ -821,6 +979,11 @@
       }
       if (!lovedOneName) { showStatus("Please enter your loved one's name.", 'error'); return; }
 
+      const musicRadio = form.querySelector('input[name="music_choice"]:checked');
+      if (!musicRadio) {
+        showStatus('Please choose a music option for the memorial video.', 'error'); return;
+      }
+
       wizardState.orderDetails = {
         customer_name: customerName,
         customer_email: customerEmail,
@@ -831,6 +994,7 @@
         stone_message: form.stone_message.value.trim(),
         stone_style: form.stone_style.value,
         stone_quantity: parseInt(form.stone_quantity.value, 10) || 1,
+        music_choice: musicRadio.value,
       };
 
       goToStep(2);
@@ -1033,6 +1197,7 @@
     function buildOrderSummary() {
       const d = wizardState.orderDetails;
       const styleLabels = { black_slate: 'Black Slate', grey_granite: 'Grey Granite', river_stone: 'River Stone' };
+      const musicLabels = { beautiful: 'Beautiful', emotion: 'Emotional', nature: 'Nature', none: 'No music' };
       const rows = [
         ['For', d.loved_one_name],
         ['Your name', d.customer_name],
@@ -1042,6 +1207,7 @@
         d.stone_message ? ['Stone message', '"' + d.stone_message + '"'] : null,
         ['Stone style', styleLabels[d.stone_style] || d.stone_style],
         ['Quantity', d.stone_quantity],
+        ['Music', musicLabels[d.music_choice] || d.music_choice],
         ['Photos uploaded', wizardState.selectedFiles.length],
       ].filter(Boolean);
 

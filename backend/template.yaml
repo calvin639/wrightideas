@@ -70,6 +70,7 @@ Globals:
         STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
         RUNWAY_WEBHOOK_URL: !Ref RunwayWebhookUrl
         RUNWAY_MODEL: !Ref RunwayModel
+        MUSIC_KEY_PREFIX: music/
     Layers:
       - !Ref DependenciesLayer
   Api:
@@ -272,7 +273,7 @@ Resources:
     Type: AWS::SQS::Queue
     Properties:
       QueueName: !Sub 'memories-video-generation-${Environment}'
-      VisibilityTimeout: 600  # 10 min (must be >= 6x Lambda timeout)
+      VisibilityTimeout: 1200  # 20 min (must be >= 6x Lambda timeout of 180s)
       RedrivePolicy:
         deadLetterTargetArn: !GetAtt VideoGenerationDLQ.Arn
         maxReceiveCount: 3
@@ -345,6 +346,18 @@ Resources:
                 Action:
                   - ses:SendEmail
                   - ses:SendRawEmail
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                Resource:
+                  # Cross-region inference profile + foundation models across all EU routing regions
+                  - !Sub 'arn:aws:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/eu.anthropic.claude-haiku-*'
+                  - 'arn:aws:bedrock:eu-*::foundation-model/anthropic.claude-haiku-*'
+              - Effect: Allow
+                Action:
+                  - aws-marketplace:ViewSubscriptions
+                  - aws-marketplace:Subscribe
                 Resource: '*'
               # Secrets are injected as Lambda env vars at deploy time — no Secrets Manager needed at runtime
 
@@ -440,8 +453,22 @@ Resources:
       Handler: functions.video_generator.handler.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Description: Submit files to Runway ML for image-to-video conversion
-      Timeout: 90
-      MemorySize: 512
+      # Per-image Bedrock prompt generation adds ~2-4s per file, and files
+      # iterate serially. 180s covers a max-size order (~10 stones) comfortably.
+      # SQS VisibilityTimeout (600s) must remain >= 6x this value.
+      Timeout: 180
+      # 1024MB gives us headroom for Pillow image resize on large phone photos.
+      MemorySize: 1024
+      Environment:
+        Variables:
+          # Set to "false" to disable per-image LLM prompts and use a single
+          # generic fallback prompt for every file. Useful as a kill switch
+          # if Bedrock costs/quality become a problem.
+          USE_PER_IMAGE_PROMPTS: "true"
+          # Bedrock model for prompt generation. EU cross-region inference profile.
+          # Model access must be enabled in all EU regions via the Bedrock console.
+          BEDROCK_PROMPT_MODEL: "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
+          BEDROCK_REGION: !Ref AWS::Region
       Events:
         VideoGenerationQueue:
           Type: SQS

@@ -99,6 +99,11 @@ def lambda_handler(event, context):
     if not isinstance(quantity, int) or quantity < 1 or quantity > 100:
         return error("stone_quantity must be an integer between 1 and 100")
 
+    VALID_MUSIC = {"beautiful", "emotion", "nature", "none"}
+    music_choice = body.get("music_choice", "")
+    if music_choice not in VALID_MUSIC:
+        return error(f"music_choice must be one of: {', '.join(sorted(VALID_MUSIC))}")
+
     # ── Create order ──────────────────────────────────────────────────────────
     order = Order(
         customer_name=body["customer_name"].strip(),
@@ -111,6 +116,7 @@ def lambda_handler(event, context):
         stone_style=stone_style,
         stone_quantity=quantity,
         total_amount_cents=calculate_price_cents(quantity),
+        music_choice=music_choice,
     )
     create_order(order)
     logger.info(f"Order created: {order.order_id}")

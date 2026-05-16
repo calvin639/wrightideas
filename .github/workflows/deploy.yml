@@ -32,6 +32,16 @@ jobs:
           aws s3 sync memories/ s3://memories-frontend-dev/ \
             --delete
 
+      - name: Upload music assets to videos bucket
+        run: |
+          VIDEOS_BUCKET=$(aws cloudformation describe-stacks \
+            --stack-name memories-in-stone-dev \
+            --region eu-west-1 \
+            --query "Stacks[0].Outputs[?OutputKey=='VideosBucketName'].OutputValue" \
+            --output text)
+          aws s3 sync sample/music/ s3://$VIDEOS_BUCKET/music/ \
+            --region eu-west-1
+
       - name: Invalidate CloudFront cache
         run: |
           aws cloudfront create-invalidation \

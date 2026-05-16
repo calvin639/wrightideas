@@ -82,6 +82,7 @@ class Order:
     stone_style: str = "black_slate"
     stone_quantity: int = 1
     total_amount_cents: int = 0
+    music_choice: str = ""       # beautiful | emotion | nature | none
 
     # Stripe
     stripe_session_id: str = ""

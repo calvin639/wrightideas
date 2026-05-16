@@ -36,6 +36,7 @@ logger.setLevel(logging.INFO)
 VIDEOS_BUCKET = os.environ.get("VIDEOS_BUCKET", "")
 VIDEOS_CF_URL = os.environ.get("VIDEOS_CF_URL", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://memories.wrightideas.co")
+MUSIC_KEY_PREFIX = os.environ.get("MUSIC_KEY_PREFIX", "music/")
 
 s3 = boto3.client("s3")
 
@@ -118,7 +119,7 @@ def _build_montage(order_id: str) -> None:
 
         # ── 5. Add background music + fade in/out ─────────────────────────────
         logger.info("Adding music…")
-        music_path = _get_background_music(tmp)
+        music_path = _get_background_music(tmp, music_choice=order.music_choice)
         final_output = tmp / "montage_final.mp4"
 
         if music_path and music_path.exists():
@@ -277,31 +278,20 @@ def _normalise_clip(input_path: str, output_path: str) -> None:
     ])
 
 
-def _get_background_music(tmp: Path) -> Path | None:
-    """
-    Fetch background music for the montage.
-    Falls back to a bundled default track (include a gentle_music.mp3 in src/).
-    Future: integrate Artlist Enterprise API to pull licensed tracks.
-    """
-    # Check for a bundled default track
-    bundled = Path(__file__).parent / "assets" / "gentle_music.mp3"
-    if bundled.exists():
-        return bundled
+def _get_background_music(tmp: Path, music_choice: str = "") -> Path | None:
+    """Download the chosen music track from S3 (music/{choice}.mp3 in VIDEOS_BUCKET)."""
+    if not music_choice or music_choice == "none":
+        return None
 
-    # TODO: Add Artlist Enterprise API integration here to pull a licensed track
-    # Example:
-    # resp = requests.get(
-    #     "https://api.artlist.io/v1/songs",
-    #     headers={"Authorization": f"Bearer {ARTLIST_API_KEY}"},
-    #     params={"mood": "emotional", "limit": 1}
-    # )
-    # track_url = resp.json()["songs"][0]["downloadUrl"]
-    # local_path = tmp / "music.mp3"
-    # local_path.write_bytes(requests.get(track_url).content)
-    # return local_path
-
-    logger.warning("No background music found. Add gentle_music.mp3 to assets/")
-    return None
+    local_path = tmp / "music.mp3"
+    s3_key = f"{MUSIC_KEY_PREFIX}{music_choice}.mp3"
+    try:
+        s3.download_file(VIDEOS_BUCKET, s3_key, str(local_path))
+        logger.info(f"Downloaded music: {s3_key}")
+        return local_path
+    except Exception as e:
+        logger.warning(f"Could not download music '{s3_key}': {e} — skipping audio")
+        return None
 
 
 def _get_ffmpeg() -> str:
