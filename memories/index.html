@@ -1239,13 +1239,11 @@
       clearStatus();
 
       try {
+        // success_url / cancel_url are set server-side in create_checkout/handler.py.
+        // success_url → memories/order/success.html (matches backend hardcoded path).
         const resp = await fetch(API_BASE + '/orders/' + encodeURIComponent(wizardState.orderId) + '/checkout', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            success_url: window.location.origin + '/order-confirmed?order_id=' + wizardState.orderId,
-            cancel_url: window.location.href,
-          }),
         });
 
         if (!resp.ok) {

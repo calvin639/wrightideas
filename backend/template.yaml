@@ -511,8 +511,18 @@ Resources:
       CodeUri: src/
       Handler: functions.runway_poller.handler.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      Description: Poll Runway ML for missed webhook callbacks (invoke manually or via EventBridge)
+      Description: Poll Runway ML every 5 min for missed webhook callbacks — Runway webhooks don't reliably reach us, so the poller is the primary completion signal, not just a fallback
       Timeout: 120
+      Events:
+        # The poller is idempotent — it scans for orders in PROCESSING and
+        # only acts on files whose Runway task reports DONE. Safe to run
+        # frequently; cost is negligible (one Lambda invocation per 5 min).
+        PollSchedule:
+          Type: Schedule
+          Properties:
+            Schedule: rate(5 minutes)
+            Description: Poll Runway every 5 min for missed webhook callbacks
+            Enabled: true
 
 # ── OUTPUTS ────────────────────────────────────────────────────────────────────
 

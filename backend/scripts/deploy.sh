@@ -30,8 +30,23 @@ fi
 # Use whichever Stripe key var is set
 STRIPE_KEY="${STRIPE_SECRET_KEY:-$STRIPE_SANDBOX_KEY}"
 
-# Webhook secret can be placeholder on first deploy
-WEBHOOK_SECRET="${STRIPE_WEBHOOK_SECRET:-whsec_placeholder_update_after_deploy}"
+# Webhook secret — prefer env-specific name (STRIPE_WH_DEV / STRIPE_WH_PROD),
+# fall back to generic STRIPE_WEBHOOK_SECRET, then placeholder on first deploy.
+if [ "$ENV" = "prod" ]; then
+  WEBHOOK_VAR="STRIPE_WH_PROD"
+  WEBHOOK_SECRET="${STRIPE_WH_PROD:-${STRIPE_WEBHOOK_SECRET:-whsec_placeholder_update_after_deploy}}"
+else
+  WEBHOOK_VAR="STRIPE_WH_DEV"
+  WEBHOOK_SECRET="${STRIPE_WH_DEV:-${STRIPE_WEBHOOK_SECRET:-whsec_placeholder_update_after_deploy}}"
+fi
+
+# Warn loudly if we're about to deploy the placeholder
+case "$WEBHOOK_SECRET" in
+  whsec_placeholder*)
+    echo "⚠️  $WEBHOOK_VAR / STRIPE_WEBHOOK_SECRET is unset — deploying placeholder."
+    echo "    The Stripe webhook handler will return 500 until this is fixed."
+    ;;
+esac
 
 # Runway webhook URL: prefer env var, then derive from live stack output, then placeholder
 if [ -n "$RUNWAY_WEBHOOK_URL" ]; then

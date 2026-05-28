@@ -149,12 +149,18 @@
       if (!container) return;
 
       if (videoUrl) {
+        // autoplay + muted are both required for browsers to start playback
+        // on load without a user gesture. playsinline keeps iOS from going
+        // fullscreen. preload=auto so the video is ready to play immediately.
+        // Customer can unmute via the controls.
         container.innerHTML = `
           <div class="tribute-video-wrap">
             <video
               class="tribute-video"
               controls
-              preload="metadata"
+              autoplay
+              muted
+              preload="auto"
               playsinline
               aria-label="Memorial video for ${lovedOneName || 'your loved one'}"
             >
@@ -163,6 +169,9 @@
                 Your browser doesn't support HTML5 video. <a href="${videoUrl}" style="color:var(--stone);">Download the memorial video</a>.
               </p>
             </video>
+            <p class="tribute-video-hint" style="margin:8px 0 0;text-align:center;font-size:0.85rem;color:var(--text-light);font-style:italic;">
+              Tap the speaker icon to unmute
+            </p>
           </div>`;
       } else {
         container.innerHTML = `

@@ -213,11 +213,13 @@ def _create_title_card(
     img = Image.new("RGB", (W, H), BG)
     draw = ImageDraw.Draw(img)
 
-    # Use default Pillow font (always available — no external font file needed)
+    # Use default Pillow font (always available — no external font file needed).
+    # Sizes are 3x the original (was 52/36/28) so the title card is readable
+    # at a glance — especially on mobile when viewing the tribute page.
     try:
-        font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 52)
-        font_med   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 36)
-        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 28)
+        font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 156)
+        font_med   = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 108)
+        font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 84)
     except OSError:
         # Lambda may not have DejaVu — fall back to PIL default bitmap font
         font_large = ImageFont.load_default()
@@ -235,13 +237,15 @@ def _create_title_card(
         w = bbox[2] - bbox[0]
         draw.text(((W - w) / 2, y), text, font=font, fill=color)
 
+    # y-offsets from H/2 also scaled 3x (was -90/-30/+50 and -60/+10) so the
+    # taller font sizes don't overlap.
     if dates_line:
-        centred_text(draw, "In Loving Memory of", font_med,   H // 2 - 90, GOLD)
-        centred_text(draw, loved_one_name,         font_large, H // 2 - 30, WHITE)
-        centred_text(draw, dates_line,             font_small, H // 2 + 50, GOLD)
+        centred_text(draw, "In Loving Memory of", font_med,   H // 2 - 270, GOLD)
+        centred_text(draw, loved_one_name,         font_large, H // 2 - 90,  WHITE)
+        centred_text(draw, dates_line,             font_small, H // 2 + 150, GOLD)
     else:
-        centred_text(draw, "In Loving Memory of", font_med,   H // 2 - 60, GOLD)
-        centred_text(draw, loved_one_name,         font_large, H // 2 + 10, WHITE)
+        centred_text(draw, "In Loving Memory of", font_med,   H // 2 - 180, GOLD)
+        centred_text(draw, loved_one_name,         font_large, H // 2 + 30,  WHITE)
 
     # Save PNG to temp file, then convert to video with FFmpeg
     png_path = output_path.replace(".mp4", "_title.png")

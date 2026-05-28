@@ -36,3 +36,7 @@ Thumbs.db
 .claude/settings.local.json
 
 test_order*
+
+# Test photos for backend pipeline test — folder is tracked, photos aren't
+backend/test_photos/*
+!backend/test_photos/README.md

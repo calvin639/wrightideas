@@ -1,33 +1,72 @@
 #!/usr/bin/env python3
 """
-End-to-end pipeline test — creates a real order, reuses uploaded photos
-from a reference S3 folder, simulates payment, and lets the full pipeline run.
+End-to-end pipeline test — exercises the full real-customer flow:
+
+  1. Discovers photos in a local folder (default: backend/test_photos/).
+  2. POSTs /orders to create an order and get a presigned PUT URL per file.
+  3. Uploads each local photo to S3 via its presigned URL — same as the
+     real frontend does.
+  4. POSTs /orders/{id}/checkout to create a real Stripe (test mode)
+     Checkout session, opens the URL, prints the test card to use.
+  5. After payment, Stripe's real webhook fires and the pipeline runs
+     end-to-end — delivering BOTH transactional emails:
+       • send_order_confirmation  (stripe_webhook handler on PAID)
+       • send_video_ready         (montage_builder handler on COMPLETE)
 
 Usage:
+  # Drop a few photos in backend/test_photos/ first, then:
   python3 scripts/test_video_pipeline.py
 
-The script prints the order ID and a monitoring command at the end.
-Run ./scripts/check_pipeline.sh <order_id> at any point to inspect progress.
+  # Choose background music (one of: none | beautiful | emotion | nature):
+  python3 scripts/test_video_pipeline.py --music nature
+
+  # Override the photos folder:
+  TEST_PHOTOS_DIR=/path/to/photos python3 scripts/test_video_pipeline.py
+
+After completing checkout in the browser, run
+./scripts/check_pipeline.sh <order_id> to watch progress.
+
+Heads-up: each photo becomes one Runway clip, which costs real money on
+your Runway API key. Keep the test folder modest (e.g. 3–5 photos).
 """
 
-import json
-import subprocess
+import argparse
+import mimetypes
+import os
 import sys
-import time
+import webbrowser
+from pathlib import Path
 
 import boto3
 import requests
+
+# Must align with VALID_MUSIC in create_order/handler.py
+VALID_MUSIC_CHOICES = {"none", "beautiful", "emotion", "nature"}
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
 STACK_NAME = "memories-in-stone-dev"
 REGION = "eu-west-1"
 
-# Reference order whose uploaded photos we'll reuse
-REF_ORDER_ID = "61bbbe5a-e7e6-4334-a41a-75d67d31a900"
+# Local folder of test photos. Anything matching ALLOWED_EXTS is uploaded.
+SCRIPT_DIR = Path(__file__).resolve().parent
+DEFAULT_PHOTOS_DIR = SCRIPT_DIR.parent / "test_photos"
+TEST_PHOTOS_DIR = Path(os.environ.get("TEST_PHOTOS_DIR", DEFAULT_PHOTOS_DIR))
 
-# Test customer — use a @wrightideas.biz address so SES delivers the email
-ORDER_PAYLOAD = {
+# Must align with ALLOWED_TYPES in create_order/handler.py
+ALLOWED_EXTS = {
+    ".jpg":  "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png":  "image/png",
+    ".webp": "image/webp",
+    ".heic": "image/heic",
+    ".mp4":  "video/mp4",
+    ".mov":  "video/quicktime",
+}
+
+# Test customer — everything except `files` (built from disk) and
+# `music_choice` (parsed from CLI; defaults to "none").
+ORDER_BASE = {
     "customer_name": "Calvin Wright",
     "customer_email": "calvin@wrightideas.biz",
     "customer_phone": "+353871234567",
@@ -37,13 +76,18 @@ ORDER_PAYLOAD = {
     "stone_message": "Forever in our hearts",
     "stone_style": "black_slate",
     "stone_quantity": 1,
-    "files": [
-        {"filename": "IMG_5381.jpg", "content_type": "image/jpeg", "caption": "Family photo 1"},
-        {"filename": "IMG_5831.jpg", "content_type": "image/jpeg", "caption": "Family photo 2"},
-        {"filename": "IMG_5974.jpg", "content_type": "image/jpeg", "caption": "Family photo 3"},
-        {"filename": "IMG_6428.jpg", "content_type": "image/jpeg", "caption": "Family photo 4"},
-    ],
 }
+
+
+def _parse_args():
+    p = argparse.ArgumentParser(description="End-to-end Memories in Stone test order")
+    p.add_argument(
+        "--music",
+        default=os.environ.get("MUSIC_CHOICE", "none"),
+        choices=sorted(VALID_MUSIC_CHOICES),
+        help="Background music track for the montage (default: none)",
+    )
+    return p.parse_args()
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -54,40 +98,39 @@ def cf_outputs(stack_name: str, region: str) -> dict:
     return {o["OutputKey"]: o["OutputValue"] for o in resp["Stacks"][0].get("Outputs", [])}
 
 
-def dynamo_set_paid(table_name: str, order_id: str, region: str) -> None:
-    db = boto3.resource("dynamodb", region_name=region)
-    table = db.Table(table_name)
-    from datetime import datetime, timezone
-    now = datetime.now(timezone.utc).isoformat()
-    table.update_item(
-        Key={"PK": f"ORDER#{order_id}", "SK": "METADATA"},
-        UpdateExpression="SET #st = :s, updated_at = :ts, GSI1PK = :gsi",
-        ExpressionAttributeNames={"#st": "status"},
-        ExpressionAttributeValues={":s": "PAID", ":ts": now, ":gsi": "STATUS#PAID"},
-    )
+def discover_photos(folder: Path) -> list[tuple[Path, str]]:
+    """Return [(path, content_type), ...] for every supported file in folder.
 
-
-def sqs_trigger_video_gen(queue_url: str, order_id: str, region: str) -> None:
-    sqs = boto3.client("sqs", region_name=region)
-    sqs.send_message(
-        QueueUrl=queue_url,
-        MessageBody=json.dumps({"order_id": order_id, "event": "payment_confirmed"}),
-    )
-
-
-def s3_copy(src_bucket: str, src_key: str, dst_bucket: str, dst_key: str, region: str) -> None:
-    s3 = boto3.client("s3", region_name=region)
-    s3.copy_object(
-        CopySource={"Bucket": src_bucket, "Key": src_key},
-        Bucket=dst_bucket,
-        Key=dst_key,
-    )
+    Sorted by filename so order is deterministic and matches what a customer
+    would see in a normal directory listing.
+    """
+    if not folder.exists():
+        return []
+    out: list[tuple[Path, str]] = []
+    for p in sorted(folder.iterdir()):
+        if not p.is_file():
+            continue
+        ct = ALLOWED_EXTS.get(p.suffix.lower())
+        if not ct:
+            continue
+        # Prefer mimetypes when it agrees (handles edge cases); fall back to our table
+        guess, _ = mimetypes.guess_type(p.name)
+        out.append((p, guess if guess in ALLOWED_EXTS.values() else ct))
+    return out
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    print("── Stack outputs ────────────────────────────────────────────────────")
+    args = _parse_args()
+    music_choice = args.music
+    print(f"── Test config ──────────────────────────────────────────────────────")
+    print(f"   Music choice: {music_choice}")
+    if music_choice != "none":
+        print(f"   (Asset must exist at s3://VIDEOS_BUCKET/music/{music_choice}.mp3,")
+        print(f"    otherwise montage_builder skips audio with a warning.)")
+
+    print("\n── Stack outputs ────────────────────────────────────────────────────")
     try:
         outs = cf_outputs(STACK_NAME, REGION)
     except Exception as e:
@@ -95,16 +138,15 @@ def main():
         sys.exit(1)
 
     api_url       = outs.get("ApiUrl", "").rstrip("/")
-    uploads_bucket = outs.get("UploadsBucketName")
-    orders_table   = outs.get("OrdersTableName")
-    video_queue    = outs.get("VideoGenerationQueueUrl")
 
-    for k, v in [("ApiUrl", api_url), ("UploadsBucketName", uploads_bucket),
-                  ("OrdersTableName", orders_table), ("VideoGenerationQueueUrl", video_queue)]:
-        if not v:
-            print(f"❌ Missing stack output: {k}")
-            sys.exit(1)
-        print(f"   {k} = {v}")
+    if not api_url:
+        print("❌ Missing stack output: ApiUrl")
+        sys.exit(1)
+    print(f"   ApiUrl = {api_url}")
+
+    webhook_url = f"{api_url}/webhooks/stripe"
+    print(f"\n   Expected Stripe webhook URL (must be configured in Stripe Dashboard):")
+    print(f"     {webhook_url}")
 
     # Check Runway model currently on the Lambda
     try:
@@ -115,9 +157,26 @@ def main():
     except Exception:
         pass
 
-    # ── 1. Create order via API ───────────────────────────────────────────────
+    # ── 1. Discover local test photos ─────────────────────────────────────────
+    print(f"\n── Discovering photos in {TEST_PHOTOS_DIR} ─────────────────────────")
+    photos = discover_photos(TEST_PHOTOS_DIR)
+    if not photos:
+        print(f"❌ No supported photos/videos found in {TEST_PHOTOS_DIR}")
+        print(f"   Supported extensions: {sorted(ALLOWED_EXTS)}")
+        print(f"   Drop a few files in that folder and re-run.")
+        sys.exit(1)
+    print(f"   Found {len(photos)} file(s):")
+    for p, ct in photos:
+        print(f"     {p.name}  ({ct}, {p.stat().st_size:,} bytes)")
+
+    # ── 2. Create order via API ───────────────────────────────────────────────
     print("\n── Creating order ───────────────────────────────────────────────────")
-    resp = requests.post(f"{api_url}/orders", json=ORDER_PAYLOAD, timeout=30)
+    files_payload = [
+        {"filename": p.name, "content_type": ct, "caption": f"Photo {i+1}"}
+        for i, (p, ct) in enumerate(photos)
+    ]
+    order_payload = {**ORDER_BASE, "music_choice": music_choice, "files": files_payload}
+    resp = requests.post(f"{api_url}/orders", json=order_payload, timeout=30)
     if resp.status_code not in (200, 201):
         print(f"❌ POST /orders failed {resp.status_code}: {resp.text[:500]}")
         sys.exit(1)
@@ -126,60 +185,103 @@ def main():
     order_id = data["order_id"]
     files = data["files"]  # list of {file_id, s3_key, upload_url, ...}
     print(f"   ✅ Order created: {order_id}")
-    print(f"   Files ({len(files)}):")
-    for f in files:
-        print(f"     {f['file_id'][:8]}  {f['s3_key']}")
+    print(f"   Total: €{data.get('total_amount_euros', '?')}  Stones: {data.get('stone_quantity', '?')}")
 
-    # ── 2. Copy reference photos to new order's S3 keys ──────────────────────
-    print("\n── Copying photos from reference order ──────────────────────────────")
-    ref_filenames = ["IMG_5381.jpg", "IMG_5831.jpg", "IMG_5974.jpg", "IMG_6428.jpg"]
+    if len(files) != len(photos):
+        print(f"❌ API returned {len(files)} file slots but we have {len(photos)} photos — aborting")
+        sys.exit(1)
 
-    for i, file_info in enumerate(files):
-        src_filename = ref_filenames[i % len(ref_filenames)]
-        src_key = f"orders/{REF_ORDER_ID}/{src_filename}"
-        dst_key = file_info["s3_key"]
+    # ── 3. Upload each photo via its presigned URL (real customer flow) ──────
+    print("\n── Uploading photos via presigned PUT URLs ──────────────────────────")
+    for (local_path, content_type), file_info in zip(photos, files):
+        upload_url = file_info["upload_url"]
+        s3_key     = file_info["s3_key"]
         try:
-            s3_copy(uploads_bucket, src_key, uploads_bucket, dst_key, REGION)
-            print(f"   ✅ {src_filename}  →  {dst_key}")
+            with open(local_path, "rb") as fh:
+                body = fh.read()
+            # IMPORTANT: Content-Type must match what was sent in the /orders
+            # request — the presigned URL is signed against it, otherwise S3
+            # returns SignatureDoesNotMatch.
+            put = requests.put(
+                upload_url,
+                data=body,
+                headers={"Content-Type": content_type},
+                timeout=120,
+            )
+            if put.status_code not in (200, 204):
+                print(f"   ❌ Upload failed for {local_path.name} ({put.status_code}): {put.text[:300]}")
+                sys.exit(1)
+            print(f"   ✅ {local_path.name}  →  s3://.../{s3_key}  ({len(body):,} bytes)")
         except Exception as e:
-            print(f"   ❌ Failed to copy {src_filename}: {e}")
+            print(f"   ❌ Upload error for {local_path.name}: {e}")
             sys.exit(1)
 
-    # ── 3. Simulate payment: set order PAID + push to SQS ────────────────────
-    print("\n── Simulating payment ───────────────────────────────────────────────")
+    # ── 4. Create real Stripe Checkout session (test mode) ───────────────────
+    print("\n── Creating Stripe Checkout session ─────────────────────────────────")
     try:
-        dynamo_set_paid(orders_table, order_id, REGION)
-        print("   ✅ Order status → PAID in DynamoDB")
+        co_resp = requests.post(f"{api_url}/orders/{order_id}/checkout", timeout=30)
     except Exception as e:
-        print(f"   ❌ DynamoDB update failed: {e}")
+        print(f"   ❌ POST /orders/{order_id}/checkout failed: {e}")
         sys.exit(1)
 
-    time.sleep(1)  # tiny pause so DynamoDB write is visible before SQS fires
-
-    try:
-        sqs_trigger_video_gen(video_queue, order_id, REGION)
-        print("   ✅ Message sent to VideoGenerationQueue")
-    except Exception as e:
-        print(f"   ❌ SQS send failed: {e}")
+    if co_resp.status_code not in (200, 201):
+        print(f"   ❌ Checkout creation failed {co_resp.status_code}: {co_resp.text[:500]}")
         sys.exit(1)
+
+    co_data = co_resp.json()
+    checkout_url = co_data.get("checkout_url")
+    session_id   = co_data.get("session_id")
+    if not checkout_url:
+        print(f"   ❌ Response missing checkout_url: {co_data}")
+        sys.exit(1)
+
+    print(f"   ✅ Stripe Checkout session created: {session_id}")
+    print(f"\n   Open this URL in your browser to complete payment:")
+    print(f"     {checkout_url}\n")
+    print(f"   Stripe test card details (test mode only):")
+    print(f"     Card number : 4242 4242 4242 4242")
+    print(f"     Expiry      : any future date (e.g. 12/30)")
+    print(f"     CVC         : any 3 digits (e.g. 123)")
+    print(f"     ZIP / name  : anything")
+
+    # Try to auto-open the URL (best effort — silently no-op if no browser available)
+    try:
+        webbrowser.open(checkout_url)
+    except Exception:
+        pass
 
     # ── Done ─────────────────────────────────────────────────────────────────
+    model_str = model if "model" in dir() else "check Lambda env"
     print(f"""
-── Pipeline started ─────────────────────────────────────────────────
+── Pipeline armed ───────────────────────────────────────────────────
    Order ID : {order_id}
-   Model    : {model if "model" in dir() else "check Lambda env"}
-   Customer : {ORDER_PAYLOAD['customer_email']}
+   Photos   : {len(photos)} (one Runway clip each)
+   Music    : {music_choice}
+   Model    : {model_str}
+   Customer : {ORDER_BASE['customer_email']}
+
+After you complete payment in the browser:
+   - Stripe fires checkout.session.completed → API GW → StripeWebhookFunction
+   - StripeWebhookFunction sends:
+       • send_order_confirmation  → {ORDER_BASE['customer_email']}
+       • send_admin_new_order     → admin (see ADMIN_EMAIL env)
+   - then queues video generation. When montage finishes,
+     MontageBuilderFunction sends:
+       • send_video_ready         → {ORDER_BASE['customer_email']}
 
 Monitor progress:
    ./scripts/check_pipeline.sh {order_id}
 
 Lambda logs (tail):
-   aws logs tail /aws/lambda/memories-video-generator-dev --follow --region {REGION}
-   aws logs tail /aws/lambda/memories-runway-poller-dev  --follow --region {REGION}
-   aws logs tail /aws/lambda/memories-montage-builder-dev --follow --region {REGION}
+   aws logs tail /aws/lambda/memories-stripe-webhook-dev   --follow --region {REGION}
+   aws logs tail /aws/lambda/memories-video-generator-dev  --follow --region {REGION}
+   aws logs tail /aws/lambda/memories-runway-poller-dev    --follow --region {REGION}
+   aws logs tail /aws/lambda/memories-montage-builder-dev  --follow --region {REGION}
 
-The poller runs every 5 min as a fallback if Runway webhooks don't arrive.
-You should receive a video-ready email at {ORDER_PAYLOAD['customer_email']} when complete.
+If you DON'T see the order-confirmation email within ~30 seconds of paying,
+the Stripe webhook is likely not configured — verify in Stripe Dashboard
+that the endpoint above is registered and the signing secret matches the
+one stored at SSM /memories/dev/stripe-webhook-secret.
 """)
 
 

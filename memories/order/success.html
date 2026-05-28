@@ -1,0 +1,448 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>Thank you — Memories in Stone</title>
+  <meta name="description" content="Your order has been received. We're now creating your memorial tribute video."/>
+  <meta name="robots" content="noindex"/>
+  <link rel="icon" href="https://wrightideas.biz/favicon.ico" type="image/x-icon" sizes="16x16"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Lora:ital,wght@0,400;0,600;1,400&family=Inter:wght@400;500;600&display=swap" rel="stylesheet"/>
+
+  <style>
+    :root {
+      --bg:          #fbfaf8;
+      --surface:     #ffffff;
+      --card:        #f9f6f2;
+      --text:        #2c2c2c;
+      --text-light:  #6b6b6b;
+      --stone:       #4a3f35;
+      --accent:      #9c7c5e;
+      --accent-soft: #c5dfca;
+      --success:     #3f8a4f;
+      --border:      #e5e0d8;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      line-height: 1.55;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Header */
+    .page-header {
+      padding: 28px 24px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .page-header-inner {
+      max-width: 720px;
+      margin: 0 auto;
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+    }
+    .brand {
+      text-decoration: none;
+      color: var(--stone);
+      font-family: 'Lora', Georgia, serif;
+      font-weight: 600;
+      font-size: 1.25rem;
+    }
+    .brand-sub {
+      font-family: 'Lora', Georgia, serif;
+      font-style: italic;
+      font-weight: 400;
+      color: var(--text-light);
+      font-size: 0.9rem;
+    }
+
+    /* Main */
+    main {
+      flex: 1;
+      padding: 56px 24px 40px;
+      display: flex;
+      justify-content: center;
+    }
+    .container {
+      width: 100%;
+      max-width: 560px;
+    }
+
+    /* Loading state */
+    .loading-state {
+      text-align: center;
+      color: var(--text-light);
+      padding: 48px 0;
+    }
+    .loading-pulse {
+      width: 48px;
+      height: 48px;
+      margin: 0 auto 20px;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      animation: pulse 1.6s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 0.5; }
+      50%      { transform: scale(1.08); opacity: 1; }
+    }
+
+    /* Success state */
+    .check-circle {
+      width: 64px;
+      height: 64px;
+      margin: 0 auto 24px;
+      border-radius: 50%;
+      background: var(--accent-soft);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--success);
+    }
+
+    h1.thanks {
+      font-family: 'Lora', Georgia, serif;
+      font-weight: 600;
+      font-size: 1.85rem;
+      margin: 0 0 12px;
+      color: var(--stone);
+      text-align: center;
+      line-height: 1.25;
+    }
+    p.lede {
+      text-align: center;
+      color: var(--text);
+      font-size: 1.05rem;
+      margin: 0 auto 36px;
+      max-width: 460px;
+    }
+    p.lede strong { color: var(--stone); }
+
+    /* Order card */
+    .order-card {
+      background: var(--card);
+      border-left: 4px solid var(--accent);
+      border-radius: 6px;
+      padding: 20px 24px;
+      margin: 0 0 32px;
+    }
+    .order-card-title {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 0.78rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin: 0 0 14px;
+    }
+    .order-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 7px 0;
+      font-size: 0.95rem;
+    }
+    .order-row + .order-row { border-top: 1px dashed var(--border); }
+    .order-row .label { color: var(--text-light); }
+    .order-row .value { color: var(--text); font-weight: 500; text-align: right; }
+    .order-row .value.mono {
+      font-family: 'SF Mono', Menlo, Consolas, monospace;
+      font-size: 0.9rem;
+    }
+
+    /* Next steps */
+    .next-steps {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 22px 24px;
+      margin: 0 0 32px;
+    }
+    .next-steps h2 {
+      font-family: 'Lora', Georgia, serif;
+      font-size: 1.1rem;
+      margin: 0 0 12px;
+      color: var(--stone);
+    }
+    .next-steps p {
+      margin: 0 0 10px;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    .next-steps p:last-child { margin-bottom: 0; }
+    .next-steps .timing {
+      display: inline-block;
+      background: var(--accent-soft);
+      color: var(--success);
+      padding: 2px 10px;
+      border-radius: 10px;
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+
+    /* Footer actions */
+    .actions {
+      text-align: center;
+      margin-top: 8px;
+    }
+    .btn-home {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 24px;
+      background: var(--stone);
+      color: #fff;
+      text-decoration: none;
+      border-radius: 6px;
+      font-weight: 500;
+      font-size: 0.95rem;
+      transition: background 0.18s;
+    }
+    .btn-home:hover { background: #3a312a; }
+    .help-line {
+      margin-top: 20px;
+      color: var(--text-light);
+      font-size: 0.85rem;
+      text-align: center;
+    }
+    .help-line a { color: var(--accent); text-decoration: none; }
+    .help-line a:hover { text-decoration: underline; }
+
+    /* Page footer */
+    .page-footer {
+      padding: 24px;
+      text-align: center;
+      color: var(--text-light);
+      font-size: 0.82rem;
+    }
+    .page-footer a { color: var(--text-light); text-decoration: none; }
+    .page-footer a:hover { color: var(--stone); }
+
+    /* Fade-in */
+    .fade-in {
+      animation: fadeIn 0.5s ease-out both;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    @media (max-width: 480px) {
+      main { padding: 32px 18px 24px; }
+      h1.thanks { font-size: 1.55rem; }
+      p.lede { font-size: 1rem; }
+      .order-card, .next-steps { padding: 18px 18px; }
+    }
+  </style>
+</head>
+<body>
+
+  <header class="page-header">
+    <div class="page-header-inner">
+      <a class="brand" href="/">Memories</a>
+      <span class="brand-sub">in Stone</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+
+      <!-- Loading state (shown by default) -->
+      <div id="loadingState" class="loading-state">
+        <div class="loading-pulse" aria-hidden="true"></div>
+        <p>Loading your order…</p>
+      </div>
+
+      <!-- Success state (populated after fetch) -->
+      <div id="successState" style="display:none;">
+
+        <div class="check-circle fade-in" aria-hidden="true">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="20 6 9 17 4 12"/>
+          </svg>
+        </div>
+
+        <h1 class="thanks fade-in" id="thanksHeading">Thank you</h1>
+        <p class="lede fade-in" id="ledeCopy">
+          Your payment has been received. We're now creating a memorial tribute video.
+        </p>
+
+        <!-- Order details (hidden until we have data) -->
+        <div id="orderCard" class="order-card fade-in" style="display:none;">
+          <p class="order-card-title">Order details</p>
+          <div class="order-row">
+            <span class="label">Order ID</span>
+            <span class="value mono" id="orderIdShort">—</span>
+          </div>
+          <div class="order-row" id="rowLovedOne" style="display:none;">
+            <span class="label">In memory of</span>
+            <span class="value" id="orderLovedOne">—</span>
+          </div>
+          <div class="order-row" id="rowStones" style="display:none;">
+            <span class="label">Stone</span>
+            <span class="value" id="orderStones">—</span>
+          </div>
+          <div class="order-row" id="rowTotal" style="display:none;">
+            <span class="label">Total paid</span>
+            <span class="value" id="orderTotal">—</span>
+          </div>
+        </div>
+
+        <div class="next-steps fade-in">
+          <h2>What happens next</h2>
+          <p>
+            <span class="timing">Within 24 hours</span>
+            we'll email you a link to the finished tribute page once your memorial video is ready.
+          </p>
+          <p id="emailLine" style="color:var(--text-light); font-size:0.9rem;">
+            Watch your inbox — we'll send it to the email you used at checkout.
+          </p>
+          <p style="color:var(--text-light); font-size:0.9rem; margin-top:14px;">
+            There's nothing else to do on your side. You can safely close this page.
+          </p>
+        </div>
+
+        <div class="actions">
+          <a href="/" class="btn-home">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            Back to Memories in Stone
+          </a>
+          <p class="help-line">
+            Questions? Email
+            <a href="mailto:calvin.wright639@gmail.com">calvin.wright639@gmail.com</a>
+          </p>
+        </div>
+
+      </div><!-- /successState -->
+
+    </div>
+  </main>
+
+  <footer class="page-footer">
+    <p>&copy; 2026 <a href="/">Wright Ideas</a> · <a href="/">Memories in Stone</a></p>
+  </footer>
+
+  <script>
+    /* ============================================================
+       SUCCESS PAGE — API CONFIG
+       Keep in sync with memories/index.html and memories/tribute.html
+       ============================================================ */
+    const API_BASE = 'https://621yr9lwh0.execute-api.eu-west-1.amazonaws.com/dev';
+
+    /* ---- Helpers ---- */
+    function $(id) { return document.getElementById(id); }
+    function show(id) { const el = $(id); if (el) el.style.display = ''; }
+    function hide(id) { const el = $(id); if (el) el.style.display = 'none'; }
+    function setText(id, text) { const el = $(id); if (el) el.textContent = text; }
+
+    function shortOrderId(id) {
+      if (!id) return '—';
+      // Strip dashes, uppercase, take first 8 chars: matches the format used in
+      // the order confirmation email (backend/src/shared/email_utils.py)
+      return '#' + id.replace(/-/g, '').slice(0, 8).toUpperCase();
+    }
+
+    function formatEuros(amount) {
+      if (amount == null) return '';
+      const n = Number(amount);
+      if (Number.isNaN(n)) return '';
+      return '€' + n.toFixed(2);
+    }
+
+    function getQueryParam(name) {
+      const params = new URLSearchParams(window.location.search);
+      return params.get(name);
+    }
+
+    /* ---- Render fallback (no order_id, or fetch failed) ---- */
+    function renderGeneric() {
+      hide('loadingState');
+      show('successState');
+      // Heading + lede already say sensible default things; just don't show the
+      // order card. Keep the "what happens next" section since it still applies.
+    }
+
+    /* ---- Render with fetched order data ---- */
+    function renderOrder(data) {
+      hide('loadingState');
+      show('successState');
+
+      const name = (data.customer_name || '').trim();
+      if (name) {
+        setText('thanksHeading', 'Thank you, ' + name.split(' ')[0]);
+      }
+
+      const loved = (data.loved_one_name || '').trim();
+      if (loved) {
+        setText('ledeCopy', "Your payment has been received. We're now creating a memorial tribute video for ");
+        const strong = document.createElement('strong');
+        strong.textContent = loved + '.';
+        $('ledeCopy').appendChild(strong);
+      }
+
+      setText('orderIdShort', shortOrderId(data.order_id));
+
+      if (loved) {
+        setText('orderLovedOne', loved);
+        show('rowLovedOne');
+      }
+
+      const qty = data.stone_quantity;
+      if (qty) {
+        const styleLabel = (data.stone_style === 'black_slate') ? 'Black Slate' : (data.stone_style || 'Stone');
+        setText('orderStones', qty + 'x ' + styleLabel);
+        show('rowStones');
+      }
+
+      const total = data.total_amount_euros;
+      if (total != null) {
+        setText('orderTotal', formatEuros(total));
+        show('rowTotal');
+      }
+
+      show('orderCard');
+    }
+
+    /* ---- Main ---- */
+    async function init() {
+      const orderId = getQueryParam('order_id');
+
+      // No order_id — show generic confirmation, but they still know payment worked
+      if (!orderId) {
+        renderGeneric();
+        return;
+      }
+
+      try {
+        const resp = await fetch(API_BASE + '/orders/' + encodeURIComponent(orderId));
+        if (!resp.ok) {
+          // Order not yet visible to GET (race between checkout completion and webhook
+          // writing the PAID status) — still show a generic confirmation.
+          renderGeneric();
+          setText('orderIdShort', shortOrderId(orderId));
+          show('orderCard');
+          return;
+        }
+        const data = await resp.json();
+        renderOrder(data);
+      } catch (e) {
+        // Network error — fall back to generic copy
+        renderGeneric();
+        setText('orderIdShort', shortOrderId(orderId));
+        show('orderCard');
+      }
+    }
+
+    init();
+  </script>
+
+</body>
+</html>
