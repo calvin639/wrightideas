@@ -459,6 +459,16 @@ body::after {
   transform: translateY(-1px);
 }
 .store-btn img { width: 18px; height: 18px; object-fit: contain; filter: brightness(0) invert(1); opacity: 0.85; }
+/* Accent variant — the "try eRate in your browser" one-click CTA */
+.store-btn-web {
+  background: linear-gradient(135deg, #7c3aed, #8b5cf6);
+  border-color: rgba(139,92,246,.55);
+}
+.store-btn-web:hover {
+  background: linear-gradient(135deg, #8b5cf6, #a78bfa);
+  border-color: rgba(167,139,250,.7);
+  transform: translateY(-1px);
+}
 
 /* ---- Contact ---- */
 .contact-grid {
