@@ -84,6 +84,11 @@ class Order:
     total_amount_cents: int = 0
     music_choice: str = ""       # beautiful | emotion | nature | none
 
+    # Generation override (optional — for internal A/B testing of Runway models).
+    # Empty string means "use the RUNWAY_MODEL Lambda env default". Not exposed
+    # in the customer order UI; set only via the test script / API for testing.
+    runway_model: str = ""       # e.g. gen4.5 | seedance2
+
     # Stripe
     stripe_session_id: str = ""
     stripe_payment_intent: str = ""

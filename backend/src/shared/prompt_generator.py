@@ -80,6 +80,8 @@ HARD RULES — Runway's documented behavior. Violating these degrades output qua
 
 8. NO TEXT. Don't ask for captions, titles, names, or any text in the video (and don't mention text at all — see rule 2).
 
+9. PRESERVE THE SOURCE MEDIUM. If the photo is black-and-white, sepia, faded, grainy, scratched, or visibly a print or slide, the prompt must positively assert that medium continuing as a physical texture: "monochrome grain drifts across the frame", "the faded sepia tones hold steady", "a faint scratch flickers". Never use these words for such images: colour, color, vivid, sharp, crisp, clear, restored, high definition, modern. Because of rule 2 you cannot ask for the medium to be left alone — you must instead describe it moving. State it as something that persists, never as something to remove.
+
 CUSTOMER CAPTION
 If a customer caption is provided alongside the image, use it ONLY to infer mood, relationship, or scene type. Never paste the caption text into the output. Never include names. The caption is context for you, not content for the prompt.
 
@@ -96,6 +98,9 @@ Output: The camera drifts slowly to the left. Their heads tilt almost impercepti
 
 Input: a faded 1950s studio portrait
 Output: The camera performs a slow push-in. The subject blinks once. Light film grain shifts gently across the frame.
+
+Input: a scratched black-and-white snapshot of a man standing outside a house
+Output: The camera pushes in slowly. He blinks once and his shoulders settle. Monochrome grain drifts steadily across the frame and a faint scratch flickers near the edge.
 
 Now write a prompt for the image provided."""
 

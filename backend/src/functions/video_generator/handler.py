@@ -42,6 +42,19 @@ UPLOADS_BUCKET = os.environ.get("UPLOADS_BUCKET")
 s3 = boto3.client("s3")
 S3_PRESIGN_EXPIRY = 3600  # 1 hour for Runway to fetch the image
 
+# Landscape ratio per model — Runway validates this strictly and the accepted
+# values differ between model families. gen3a_turbo takes 1280:768; gen4/gen4.5
+# and the veo models take 1280:720 and reject 1280:768 with a 400.
+DEFAULT_RATIO = "1280:720"
+MODEL_RATIOS = {
+    "gen3a_turbo": "1280:768",
+}
+
+
+def _ratio_for_model(model: str) -> str:
+    """Landscape ratio Runway accepts for this model (see MODEL_RATIOS)."""
+    return MODEL_RATIOS.get(model, DEFAULT_RATIO)
+
 # Per-image prompt generation can be disabled via env var as a kill switch.
 # When false, we fall back to a single generic motion prompt for every image.
 USE_PER_IMAGE_PROMPTS = os.environ.get("USE_PER_IMAGE_PROMPTS", "true").lower() == "true"
@@ -78,7 +91,10 @@ def _process_order(order_id: str) -> None:
 
     # Mark order as PROCESSING
     update_order_status(order_id, OrderStatus.PROCESSING)
-    logger.info(f"Processing {len(files)} files for order {order_id}")
+
+    # Per-order model override (for testing); empty → env default.
+    model = (getattr(order, "runway_model", "") or "").strip() or RUNWAY_MODEL
+    logger.info(f"Processing {len(files)} files for order {order_id} with model '{model}'")
 
     submitted = 0
     for f in files:
@@ -86,14 +102,16 @@ def _process_order(order_id: str) -> None:
             logger.info(f"File {f.file_id} already {f.status}, skipping")
             continue
 
+        prompt = ""
         try:
             # 1. Build the motion prompt for this specific image.
             #    Reuse a previously-generated prompt if we have one (idempotent
             #    on retries — saves a Bedrock call).
             prompt = f.runway_prompt or _build_prompt_for_file(f)
+            logger.info(f"File {f.file_id} prompt: {prompt}")
 
             # 2. Submit to Runway with the tailored prompt.
-            task_id = _submit_to_runway(f, prompt)
+            task_id = _submit_to_runway(f, prompt, model)
 
             # 3. Persist both the task ID and the prompt we used (for debugging).
             update_file_status(
@@ -109,10 +127,14 @@ def _process_order(order_id: str) -> None:
             )
         except Exception as e:
             logger.error(f"Failed to submit file {f.file_id} to Runway: {e}", exc_info=True)
+            # Persist the prompt even on failure: it's already been paid for at
+            # Bedrock, a retry can reuse it, and it's the only record of what we
+            # actually sent when debugging a Runway rejection.
             update_file_status(
                 order_id, f.file_id,
                 FileStatus.FAILED,
                 error_message=str(e),
+                runway_prompt=prompt,
             )
 
     logger.info(f"Order {order_id}: submitted {submitted}/{len(files)} files to Runway")
@@ -145,10 +167,12 @@ def _build_prompt_for_file(file) -> str:
     )
 
 
-def _submit_to_runway(file, prompt: str) -> str:
+def _submit_to_runway(file, prompt: str, model: str = RUNWAY_MODEL) -> str:
     """
     Submit a single file to Runway ML image_to_video endpoint.
     Returns the Runway task ID.
+
+    `model` is resolved by the caller (per-order override or env default).
 
     Runway API docs: https://docs.dev.runwayml.com/api/image-to-video
     """
@@ -160,11 +184,11 @@ def _submit_to_runway(file, prompt: str) -> str:
     )
 
     payload = {
-        "model": RUNWAY_MODEL,
+        "model": model,
         "promptImage": image_url,
         "promptText": prompt,
         "duration": 5,                 # 5-second clip
-        "ratio": "1280:768",           # landscape (works across gen3a_turbo and gen4.5)
+        "ratio": _ratio_for_model(model),
         "webhookUrl": get_runway_webhook_url(),
     }
 

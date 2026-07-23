@@ -20,6 +20,10 @@ Usage:
   # Choose background music (one of: none | beautiful | emotion | nature):
   python3 scripts/test_video_pipeline.py --music nature
 
+  # A/B test a Runway model (empty → the Lambda's RUNWAY_MODEL default):
+  python3 scripts/test_video_pipeline.py --model seedance2
+  python3 scripts/test_video_pipeline.py --model gen4.5
+
   # Override the photos folder:
   TEST_PHOTOS_DIR=/path/to/photos python3 scripts/test_video_pipeline.py
 
@@ -87,6 +91,12 @@ def _parse_args():
         choices=sorted(VALID_MUSIC_CHOICES),
         help="Background music track for the montage (default: none)",
     )
+    p.add_argument(
+        "--model",
+        default=os.environ.get("RUNWAY_MODEL", ""),
+        help="Runway model override, e.g. gen4.5 or seedance2 "
+             "(default: empty → the Lambda's RUNWAY_MODEL env default)",
+    )
     return p.parse_args()
 
 
@@ -124,8 +134,10 @@ def discover_photos(folder: Path) -> list[tuple[Path, str]]:
 def main():
     args = _parse_args()
     music_choice = args.music
+    model_override = args.model.strip()
     print(f"── Test config ──────────────────────────────────────────────────────")
     print(f"   Music choice: {music_choice}")
+    print(f"   Runway model: {model_override or '(Lambda default)'}")
     if music_choice != "none":
         print(f"   (Asset must exist at s3://VIDEOS_BUCKET/music/{music_choice}.mp3,")
         print(f"    otherwise montage_builder skips audio with a warning.)")
@@ -171,11 +183,17 @@ def main():
 
     # ── 2. Create order via API ───────────────────────────────────────────────
     print("\n── Creating order ───────────────────────────────────────────────────")
+    # Captions are sent empty on purpose: the real frontend (memories/index.html)
+    # has no caption field, so every production order has caption="". Sending
+    # placeholder captions here would give the prompt generator context that
+    # real orders never have, making test output unrepresentative.
     files_payload = [
-        {"filename": p.name, "content_type": ct, "caption": f"Photo {i+1}"}
-        for i, (p, ct) in enumerate(photos)
+        {"filename": p.name, "content_type": ct, "caption": ""}
+        for p, ct in photos
     ]
     order_payload = {**ORDER_BASE, "music_choice": music_choice, "files": files_payload}
+    if model_override:
+        order_payload["runway_model"] = model_override
     resp = requests.post(f"{api_url}/orders", json=order_payload, timeout=30)
     if resp.status_code not in (200, 201):
         print(f"❌ POST /orders failed {resp.status_code}: {resp.text[:500]}")
@@ -257,7 +275,7 @@ def main():
    Order ID : {order_id}
    Photos   : {len(photos)} (one Runway clip each)
    Music    : {music_choice}
-   Model    : {model_str}
+   Model    : {model_override or model_str}
    Customer : {ORDER_BASE['customer_email']}
 
 After you complete payment in the browser:

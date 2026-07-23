@@ -117,6 +117,11 @@ def lambda_handler(event, context):
         stone_quantity=quantity,
         total_amount_cents=calculate_price_cents(quantity),
         music_choice=music_choice,
+        # Optional per-order model override for internal testing. Passed through
+        # as-is (no allowlist) so new Runway models can be tested without a code
+        # change; an invalid string just makes Runway reject the submission.
+        # Empty → video_generator falls back to the RUNWAY_MODEL env default.
+        runway_model=body.get("runway_model", "").strip(),
     )
     create_order(order)
     logger.info(f"Order created: {order.order_id}")
