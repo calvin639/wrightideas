@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <meta name="robots" content="noindex"/>
+  <title>Get eRate — Currency Camera</title>
+  <link rel="icon" href="favicon.ico" type="image/x-icon" sizes="16x16"/>
+  <link rel="stylesheet" href="custom.css"/>
+  <script>
+    // Smart routing: send each visitor to the right store; everyone else to the web app.
+    (function () {
+      var ua = navigator.userAgent || navigator.vendor || window.opera || "";
+      var isIOS = (/iPad|iPhone|iPod/.test(ua) && !window.MSStream) ||
+                  (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); // iPadOS
+      var isAndroid = /android/i.test(ua);
+      var IOS_URL = "https://apps.apple.com/app/e-rate/id6753613879";
+      var PLAY_URL = "https://play.google.com/store/apps/details?id=com.wrightideas.erate";
+      var WEB_URL = "https://erate.wrightideas.biz";
+      if (isIOS) window.location.replace(IOS_URL);
+      else if (isAndroid) window.location.replace(PLAY_URL);
+      // Desktop / other: don't auto-redirect — show the choices below.
+    })();
+  </script>
+</head>
+<body>
+  <div class="orb orb-1"></div>
+  <div class="orb orb-2"></div>
+  <div class="orb orb-3"></div>
+
+  <div class="page-wrapper">
+    <main>
+      <div class="not-found-wrap">
+        <div style="font-size:3rem;margin-bottom:1rem;">📸→💱</div>
+        <h1 class="not-found-title">Get eRate</h1>
+        <p class="not-found-desc">
+          Snap a foreign menu or price tag, see it in <strong>your</strong> money — instantly, even offline.<br/>
+          Taking you to your app store…
+        </p>
+        <div style="display:flex;gap:1rem;justify-content:center;flex-wrap:wrap;margin-top:2rem;">
+          <a href="https://apps.apple.com/app/e-rate/id6753613879" class="btn-primary">Download on iOS</a>
+          <a href="https://play.google.com/store/apps/details?id=com.wrightideas.erate" class="btn-primary">Get it on Android</a>
+        </div>
+        <p style="margin-top:1.5rem;">
+          <a href="https://erate.wrightideas.biz" class="btn-secondary">Prefer your browser? Try the web version →</a>
+        </p>
+      </div>
+    </main>
+
+    <!-- FOOTER -->
+    <footer class="site-footer">
+      <div class="footer-inner">
+        <div>
+          <span class="footer-brand-text">Wright Ideas</span>
+          <p class="footer-tagline">Unleash the Global Nomad Within.<br/>Conquer Currencies with eRate.</p>
+        </div>
+        <div>
+          <p class="footer-heading">Navigation</p>
+          <ul class="footer-links">
+            <li><a href="/">Home</a></li>
+            <li><a href="/about">About Us</a></li>
+            <li><a href="/products">Products</a></li>
+            <li><a href="/contact">Contact Us</a></li>
+          </ul>
+        </div>
+        <div>
+          <p class="footer-heading">Legal</p>
+          <ul class="footer-links">
+            <li><a href="/privacy">Privacy Policy</a></li>
+            <li><a href="/terms">Terms &amp; Conditions</a></li>
+          </ul>
+        </div>
+      </div>
+      <div class="footer-bottom">© 2025 Wright Ideas. All rights reserved.</div>
+    </footer>
+  </div>
+</body>
+</html>
