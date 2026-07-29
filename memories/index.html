@@ -1051,7 +1051,11 @@
             ) +
           '</span>' +
           '<span class="file-item-name">' + escHtml(f.name) + '</span>' +
+          '<span class="file-item-badge">' + editedBadge(i, isVideo) + '</span>' +
           '<span class="file-item-size">' + formatBytes(f.size) + '</span>' +
+          '<button type="button" class="file-item-edit" data-edit="' + i + '">' +
+            (isVideo ? 'Trim' : 'Adjust') +
+          '</button>' +
           '<button class="file-item-remove" aria-label="Remove ' + escHtml(f.name) + '" data-idx="' + i + '">' +
             '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>' +
           '</button>';
@@ -1062,9 +1066,41 @@
         btn.addEventListener('click', function() {
           const idx = parseInt(btn.getAttribute('data-idx'), 10);
           wizardState.selectedFiles.splice(idx, 1);
+          // Editing state is keyed by index, so removing a file would silently
+          // shift every later crop onto the wrong photo. Rebuild the map.
+          reindexMediaMeta(idx);
           renderFileList();
         });
       });
+
+      list.querySelectorAll('.file-item-edit').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          window.openMediaEditor(parseInt(btn.getAttribute('data-edit'), 10));
+        });
+      });
+    }
+
+    function editedBadge(i, isVideo) {
+      const m = window.mediaMeta && window.mediaMeta[i];
+      if (!m) return isVideo ? '' : 'auto-framed';
+      if (isVideo && typeof m.trim_start_seconds === 'number') {
+        return 'from ' + m.trim_start_seconds.toFixed(1) + 's';
+      }
+      if (m.crop_rect) return 'framed';
+      return '';
+    }
+
+    function reindexMediaMeta(removedIdx) {
+      const meta = window.mediaMeta;
+      if (!meta) return;
+      const next = {};
+      Object.keys(meta).forEach(function(k) {
+        const idx = parseInt(k, 10);
+        if (idx < removedIdx) next[idx] = meta[k];
+        else if (idx > removedIdx) next[idx - 1] = meta[k];
+      });
+      Object.keys(meta).forEach(function(k) { delete meta[k]; });
+      Object.assign(meta, next);
     }
 
     function escHtml(str) {
@@ -1087,12 +1123,22 @@
       try {
         // Build file metadata list for the API
         const filesPayload = wizardState.selectedFiles.map(function(f, i) {
-          return {
+          const meta = (window.mediaMeta && window.mediaMeta[i]) || {};
+          const entry = {
             filename: f.name,
             content_type: f.type || 'application/octet-stream',
             file_size_bytes: f.size,
             sort_order: i,
           };
+          // Framing travels as a rectangle, not a pre-cropped file: the full
+          // resolution original is uploaded so enhancement has every pixel to
+          // work with, and the crop can be revised without a re-upload.
+          if (meta.crop_rect) entry.crop_rect = meta.crop_rect;
+          if (typeof meta.trim_start_seconds === 'number') {
+            entry.trim_start_seconds = meta.trim_start_seconds;
+          }
+          if (meta.duration_seconds) entry.duration_seconds = meta.duration_seconds;
+          return entry;
         });
 
         // POST /orders
@@ -1265,6 +1311,329 @@
       }
     });
 
+  </script>
+
+  <!-- Media editor: 16:9 framing for photos, start-point selection for videos.
+       The viewport is the same shape as the finished video, so what is framed
+       here is exactly what appears in the tribute. -->
+  <div class="editor-backdrop" id="mediaEditor" hidden role="dialog" aria-modal="true" aria-labelledby="editorTitle">
+    <div class="editor-panel">
+      <h3 class="editor-title" id="editorTitle">Adjust framing</h3>
+      <p class="editor-hint" id="editorHint">Drag to reposition, and use the slider to zoom.</p>
+
+      <div class="editor-viewport" id="editorViewport">
+        <img id="editorImage" alt="" hidden>
+        <video id="editorVideo" hidden playsinline muted preload="metadata"></video>
+        <div class="editor-guides"></div>
+      </div>
+
+      <div class="editor-control" id="editorZoomWrap">
+        <label for="editorZoom">Zoom</label>
+        <input type="range" id="editorZoom" min="100" max="300" value="100">
+      </div>
+
+      <div class="editor-control" id="editorTrimWrap" hidden>
+        <label for="editorTrim">Start point — <span id="editorTrimLabel">0.0s</span></label>
+        <input type="range" id="editorTrim" min="0" max="100" value="0" step="1">
+      </div>
+
+      <div class="editor-warning" id="editorWarning" hidden></div>
+
+      <div class="editor-actions">
+        <button type="button" class="editor-reset"  id="editorReset">Reset</button>
+        <button type="button" class="editor-cancel" id="editorCancel">Cancel</button>
+        <button type="button" class="editor-save"   id="editorSave">Done</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // Length cap for customer video clips, matching MAX_VIDEO_SECONDS in the
+    // backend. One long home video should not dominate the montage.
+    const MAX_VIDEO_SECONDS = 5;
+
+    // Per-file editing state, keyed by the index in wizardState.selectedFiles.
+    // Files with no entry get automatic framing server-side, which is always a
+    // safe result — never a bad crop, just a conservative one.
+    const mediaMeta = {};
+    window.mediaMeta = mediaMeta;
+
+    const backdrop  = document.getElementById('mediaEditor');
+    const viewport  = document.getElementById('editorViewport');
+    const imgEl     = document.getElementById('editorImage');
+    const videoEl   = document.getElementById('editorVideo');
+    const zoomEl    = document.getElementById('editorZoom');
+    const zoomWrap  = document.getElementById('editorZoomWrap');
+    const trimEl    = document.getElementById('editorTrim');
+    const trimWrap  = document.getElementById('editorTrimWrap');
+    const trimLabel = document.getElementById('editorTrimLabel');
+    const warnEl    = document.getElementById('editorWarning');
+    const hintEl    = document.getElementById('editorHint');
+    const titleEl   = document.getElementById('editorTitle');
+
+    let current = null;   // { index, kind, objectUrl, natural, view }
+
+    // ── Geometry ─────────────────────────────────────────────────────────────
+    // The image is positioned to "cover" the 16:9 viewport, then panned and
+    // zoomed. Deriving the crop from pan/zoom rather than from draggable
+    // handles means the selection can never be the wrong aspect ratio.
+
+    function baseScale(nw, nh, vw, vh) {
+      return Math.max(vw / nw, vh / nh);
+    }
+
+    function clampOffset(v) {
+      const vw = viewport.clientWidth, vh = viewport.clientHeight;
+      const s  = v.base * v.zoom;
+      const dw = v.nw * s, dh = v.nh * s;
+      v.ox = Math.min(0, Math.max(vw - dw, v.ox));
+      v.oy = Math.min(0, Math.max(vh - dh, v.oy));
+    }
+
+    function applyTransform() {
+      const v = current.view;
+      clampOffset(v);
+      const s = v.base * v.zoom;
+      imgEl.style.transform =
+        'translate(' + v.ox + 'px,' + v.oy + 'px) scale(' + s + ')';
+    }
+
+    // Crop as fractions of the source image, so it stays valid regardless of
+    // the resolution the browser previewed at.
+    function currentCropRect() {
+      const v  = current.view;
+      const s  = v.base * v.zoom;
+      const vw = viewport.clientWidth, vh = viewport.clientHeight;
+      const r = {
+        x: (-v.ox / s) / v.nw,
+        y: (-v.oy / s) / v.nh,
+        w: (vw / s) / v.nw,
+        h: (vh / s) / v.nh
+      };
+      // Guard against sub-pixel drift pushing the rect marginally out of range.
+      r.x = Math.max(0, Math.min(1, r.x));
+      r.y = Math.max(0, Math.min(1, r.y));
+      r.w = Math.min(r.w, 1 - r.x);
+      r.h = Math.min(r.h, 1 - r.y);
+      return r;
+    }
+
+    function resetView() {
+      if (!current || current.kind !== 'image') return;
+      const v = current.view;
+      const vw = viewport.clientWidth, vh = viewport.clientHeight;
+      v.zoom = 1;
+      zoomEl.value = 100;
+      // Start centred horizontally but above centre vertically: in a photo of
+      // a person the head sits above the midline, so a strictly centred crop
+      // is the one most likely to cut the top of a head.
+      const s = v.base * v.zoom;
+      v.ox = (vw - v.nw * s) / 2;
+      v.oy = (vh - v.nh * s) * 0.35;
+      applyTransform();
+    }
+
+    // ── Dragging ─────────────────────────────────────────────────────────────
+
+    let dragging = false, lastX = 0, lastY = 0;
+
+    viewport.addEventListener('pointerdown', function (e) {
+      if (!current || current.kind !== 'image') return;
+      dragging = true;
+      lastX = e.clientX; lastY = e.clientY;
+      viewport.classList.add('dragging');
+      viewport.setPointerCapture(e.pointerId);
+    });
+
+    viewport.addEventListener('pointermove', function (e) {
+      if (!dragging) return;
+      current.view.ox += e.clientX - lastX;
+      current.view.oy += e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      applyTransform();
+    });
+
+    ['pointerup', 'pointercancel'].forEach(function (evt) {
+      viewport.addEventListener(evt, function () {
+        dragging = false;
+        viewport.classList.remove('dragging');
+      });
+    });
+
+    zoomEl.addEventListener('input', function () {
+      if (!current || current.kind !== 'image') return;
+      const v = current.view;
+      const vw = viewport.clientWidth, vh = viewport.clientHeight;
+      // Zoom about the viewport centre rather than the image origin, so the
+      // subject stays put instead of sliding away as you zoom.
+      const oldS = v.base * v.zoom;
+      const cx = (vw / 2 - v.ox) / oldS;
+      const cy = (vh / 2 - v.oy) / oldS;
+      v.zoom = parseInt(zoomEl.value, 10) / 100;
+      const newS = v.base * v.zoom;
+      v.ox = vw / 2 - cx * newS;
+      v.oy = vh / 2 - cy * newS;
+      applyTransform();
+    });
+
+    // ── Open / close ─────────────────────────────────────────────────────────
+
+    function openEditor(index) {
+      const file = wizardState.selectedFiles[index];
+      if (!file) return;
+
+      const kind = file.type.indexOf('video/') === 0 ? 'video' : 'image';
+      const url  = URL.createObjectURL(file);
+      current = { index: index, kind: kind, objectUrl: url, view: null };
+
+      warnEl.hidden = true;
+      backdrop.hidden = false;
+
+      if (kind === 'video') {
+        openVideo(url, index);
+      } else {
+        openImage(url, index);
+      }
+    }
+
+    function openImage(url, index) {
+      titleEl.textContent = 'Adjust framing';
+      hintEl.textContent  = 'Drag to reposition, and use the slider to zoom.';
+      zoomWrap.hidden = false;
+      trimWrap.hidden = true;
+      videoEl.hidden = true;
+      imgEl.hidden = false;
+
+      imgEl.onload = function () {
+        const vw = viewport.clientWidth, vh = viewport.clientHeight;
+        const v = {
+          nw: imgEl.naturalWidth,
+          nh: imgEl.naturalHeight,
+          zoom: 1, ox: 0, oy: 0
+        };
+        v.base = baseScale(v.nw, v.nh, vw, vh);
+        imgEl.style.width  = v.nw + 'px';
+        imgEl.style.height = v.nh + 'px';
+        current.view = v;
+
+        const saved = mediaMeta[index] && mediaMeta[index].crop_rect;
+        if (saved) {
+          // Restore a previous crop: invert the rect back into pan/zoom.
+          const s = vw / (saved.w * v.nw);
+          v.zoom = s / v.base;
+          v.ox = -saved.x * v.nw * s;
+          v.oy = -saved.y * v.nh * s;
+          zoomEl.value = Math.round(Math.max(100, Math.min(300, v.zoom * 100)));
+          applyTransform();
+        } else {
+          resetView();
+        }
+      };
+
+      // HEIC is the common failure here: Safari decodes it, Chrome and Firefox
+      // do not. Rather than ship a ~1MB decoder to every visitor, the editor
+      // steps aside and the server falls back to automatic framing — which is
+      // conservative but never wrong. iOS usually converts to JPEG on upload
+      // anyway, so this is an uncommon path.
+      imgEl.onerror = function () {
+        imgEl.hidden = true;
+        zoomWrap.hidden = true;
+        warnEl.hidden = false;
+        warnEl.textContent =
+          'This browser cannot preview this image format (usually HEIC from an ' +
+          'iPhone). Your photo will still be used — we will frame it automatically.';
+      };
+
+      imgEl.src = url;
+    }
+
+    function openVideo(url, index) {
+      titleEl.textContent = 'Choose the moment to use';
+      hintEl.textContent =
+        'We include ' + MAX_VIDEO_SECONDS + ' seconds from the point you choose.';
+      zoomWrap.hidden = true;
+      imgEl.hidden = true;
+      videoEl.hidden = false;
+
+      videoEl.onloadedmetadata = function () {
+        const dur = videoEl.duration || 0;
+        current.duration = dur;
+        const maxStart = Math.max(0, dur - MAX_VIDEO_SECONDS);
+        trimWrap.hidden = false;
+        trimEl.min = 0;
+        trimEl.max = Math.max(0, Math.round(maxStart * 10));
+        const saved = mediaMeta[index] && mediaMeta[index].trim_start_seconds;
+        trimEl.value = saved ? Math.round(saved * 10) : 0;
+        updateTrim();
+
+        if (dur <= MAX_VIDEO_SECONDS) {
+          trimWrap.hidden = true;
+          warnEl.hidden = false;
+          warnEl.textContent =
+            'This clip is ' + dur.toFixed(1) + ' seconds, so all of it will be used.';
+        }
+      };
+
+      videoEl.onerror = function () {
+        warnEl.hidden = false;
+        warnEl.textContent =
+          'This browser cannot preview this video. The first ' +
+          MAX_VIDEO_SECONDS + ' seconds will be used.';
+        trimWrap.hidden = true;
+      };
+
+      videoEl.src = url;
+    }
+
+    function updateTrim() {
+      const start = parseInt(trimEl.value, 10) / 10;
+      trimLabel.textContent = start.toFixed(1) + 's';
+      if (isFinite(start)) videoEl.currentTime = start;
+    }
+
+    trimEl.addEventListener('input', updateTrim);
+
+    function closeEditor() {
+      if (current && current.objectUrl) URL.revokeObjectURL(current.objectUrl);
+      videoEl.removeAttribute('src');
+      imgEl.removeAttribute('src');
+      backdrop.hidden = true;
+      current = null;
+    }
+
+    document.getElementById('editorCancel').addEventListener('click', closeEditor);
+    document.getElementById('editorReset').addEventListener('click', resetView);
+
+    document.getElementById('editorSave').addEventListener('click', function () {
+      if (!current) return closeEditor();
+      const idx = current.index;
+      mediaMeta[idx] = mediaMeta[idx] || {};
+
+      if (current.kind === 'image' && current.view) {
+        mediaMeta[idx].crop_rect = currentCropRect();
+      } else if (current.kind === 'video') {
+        mediaMeta[idx].trim_start_seconds = parseInt(trimEl.value, 10) / 10;
+        mediaMeta[idx].duration_seconds = current.duration || 0;
+      }
+      closeEditor();
+      if (typeof renderFileList === 'function') renderFileList();
+    });
+
+    backdrop.addEventListener('click', function (e) {
+      if (e.target === backdrop) closeEditor();
+    });
+
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && !backdrop.hidden) closeEditor();
+    });
+
+    // Exposed so renderFileList (defined in the main script block) can wire up
+    // the per-file "Adjust" buttons.
+    window.openMediaEditor = openEditor;
+  })();
   </script>
 
 </body>
