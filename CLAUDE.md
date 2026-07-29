@@ -90,6 +90,7 @@ Editing a marketing page means editing the `.html` directly and committing — t
 
 ## Where to go next
 
+- Running the Memories in Stone pipeline end to end, and debugging it: `backend/RUNBOOK.md`
 - Deploying anything: `DEPLOYMENT.md`
 - Backend detail (API payloads, FFmpeg layer, Artlist music integration TODO): `backend/README.md`
 - Marketing copy / page text: the `*.txt` files at the repo root are plaintext drafts that correspond to the `.html` pages.

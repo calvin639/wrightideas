@@ -54,8 +54,7 @@ print(o.get('$1', ''))"
 ORDERS_TABLE=$(read_out OrdersTableName)
 UPLOADS_BUCKET=$(read_out UploadsBucketName)
 VIDEOS_BUCKET=$(read_out VideosBucketName)
-QUEUE_URL=$(read_out VideoGenerationQueueUrl)
-MONTAGE_QUEUE_URL=$(read_out MontageQueueUrl)
+STATE_MACHINE_ARN=$(read_out PipelineStateMachineArn)
 VIDEOS_CF=$(read_out VideosCloudFrontUrl)
 
 for k in OrdersTableName UploadsBucketName VideosBucketName VideoGenerationQueueUrl; do
@@ -171,16 +170,16 @@ PY
 
 # ── 5. S3 outputs ─────────────────────────────────────────────────────────────
 hdr "S3 — uploads bucket"
-UP_LS=$(aws s3 ls "s3://$UPLOADS_BUCKET/orders/$ORDER_ID/" --recursive --region "$REGION" 2>/dev/null | head -50)
+UP_LS=$(aws s3 ls "s3://$UPLOADS_BUCKET/" --recursive --region "$REGION" 2>/dev/null | grep "$ORDER_ID" | head -50)
 if [[ -n "$UP_LS" ]]; then
   echo "$UP_LS" | sed 's/^/      /'
   ok "uploads present"
 else
-  bad "no objects under s3://$UPLOADS_BUCKET/orders/$ORDER_ID/"
+  bad "no uploads/ or prepared/ objects for $ORDER_ID in s3://$UPLOADS_BUCKET"
 fi
 
 hdr "S3 — videos bucket"
-VID_LS=$(aws s3 ls "s3://$VIDEOS_BUCKET/orders/$ORDER_ID/" --recursive --region "$REGION" 2>/dev/null | head -50)
+VID_LS=$(aws s3 ls "s3://$VIDEOS_BUCKET/" --recursive --region "$REGION" 2>/dev/null | grep "$ORDER_ID" | head -50)
 if [[ -n "$VID_LS" ]]; then
   echo "$VID_LS" | sed 's/^/      /'
   if echo "$VID_LS" | grep -q '\.mp4'; then
@@ -194,32 +193,47 @@ if [[ -n "$VID_LS" ]]; then
     warn "no QR asset yet"
   fi
 else
-  warn "no objects under s3://$VIDEOS_BUCKET/orders/$ORDER_ID/ (montage hasn't run / hasn't finished)"
+  warn "no clips/ or tributes/ objects for $ORDER_ID (montage hasn't run / hasn't finished)"
 fi
 
-# ── 6. SQS queue depth (does anything look stuck?) ────────────────────────────
-hdr "SQS queue depth"
-for Q in "$QUEUE_URL" "$MONTAGE_QUEUE_URL"; do
-  [[ -z "$Q" ]] && continue
-  QNAME=$(basename "$Q")
-  ATTRS=$(aws sqs get-queue-attributes --queue-url "$Q" --region "$REGION" \
-    --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible \
-    --output json 2>/dev/null)
-  echo "$ATTRS" | python3 -c "
+# ── 6. Step Functions execution ───────────────────────────────────────────────
+# The state machine replaced the SQS queues and the EventBridge poller. It is
+# the authoritative answer to "where is this order stuck?" — the execution
+# history shows exactly which Map iteration is running or failed.
+hdr "Step Functions execution"
+if [[ -z "$STATE_MACHINE_ARN" ]]; then
+  warn "PipelineStateMachineArn not in stack outputs — is the stack up to date?"
+else
+  EXEC_ARN="${STATE_MACHINE_ARN/:stateMachine:/:execution:}:order-$ORDER_ID"
+  EXEC=$(aws stepfunctions describe-execution --execution-arn "$EXEC_ARN" \
+           --region "$REGION" --output json 2>/dev/null)
+  if [[ -z "$EXEC" ]]; then
+    warn "no execution named order-$ORDER_ID (payment may not have completed)"
+  else
+    echo "$EXEC" | python3 -c "
 import sys, json
-a = json.load(sys.stdin).get('Attributes', {})
-v  = a.get('ApproximateNumberOfMessages', '?')
-nv = a.get('ApproximateNumberOfMessagesNotVisible', '?')
-print(f'      $QNAME  visible=$([ -z $v ] && echo ?){v}  in-flight=$([ -z $nv ] && echo ?){nv}')" 2>/dev/null \
-  || echo "      $QNAME (attrs unavailable)"
-done
+e = json.load(sys.stdin)
+print(f\"      status={e['status']}  started={e.get('startDate','?')}\")
+if e.get('stopDate'):
+    print(f\"      stopped={e['stopDate']}\")
+if e.get('error'):
+    print(f\"      error={e['error']}: {str(e.get('cause',''))[:200]}\")"
+    STATUS=$(echo "$EXEC" | python3 -c "import sys,json;print(json.load(sys.stdin)['status'])")
+    case "$STATUS" in
+      RUNNING)   warn "pipeline still running — clips take a few minutes each" ;;
+      SUCCEEDED) ok "pipeline finished" ;;
+      *)         bad "execution $STATUS — see the console link below" ;;
+    esac
+    echo "      console: https://$REGION.console.aws.amazon.com/states/home?region=$REGION#/executions/details/$EXEC_ARN"
+  fi
+fi
 
 # ── 7. Recent Lambda logs (errors only) ───────────────────────────────────────
 hdr "Lambda logs (last 30 min, errors only)"
 END_MS=$(($(date +%s) * 1000))
 START_MS=$(( END_MS - 30 * 60 * 1000 ))
 
-for FN in VideoGeneratorFunction RunwayWebhookFunction MontageBuilderFunction; do
+for FN in ImagePrepFunction VideoGeneratorFunction MontageBuilderFunction; do
   GROUP="/aws/lambda/$(aws cloudformation describe-stack-resource \
     --stack-name "$STACK_NAME" --region "$REGION" \
     --logical-resource-id "$FN" \
@@ -250,7 +264,7 @@ done
 # ── 8. Check if this order was mentioned at all in the last 30 min ────────────
 hdr "Mentions of this order in logs (last 30 min)"
 FOUND_ANY=0
-for FN in VideoGeneratorFunction RunwayWebhookFunction MontageBuilderFunction; do
+for FN in ImagePrepFunction VideoGeneratorFunction MontageBuilderFunction; do
   GROUP="/aws/lambda/$(aws cloudformation describe-stack-resource \
     --stack-name "$STACK_NAME" --region "$REGION" \
     --logical-resource-id "$FN" \
