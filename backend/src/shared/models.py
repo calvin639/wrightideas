@@ -25,9 +25,19 @@ import uuid
 
 
 def _coerce(v):
-    """Convert DynamoDB Decimal to int or float so json.dumps doesn't choke."""
+    """Convert DynamoDB Decimal to int or float so json.dumps doesn't choke.
+
+    Recurses into maps and lists: crop rectangles and image assessments are
+    stored as nested maps of floats, and DynamoDB hands every one of them back
+    as a Decimal. Without the recursion those nested values reach json.dumps
+    untouched and raise.
+    """
     if isinstance(v, Decimal):
         return int(v) if v % 1 == 0 else float(v)
+    if isinstance(v, dict):
+        return {k: _coerce(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_coerce(x) for x in v]
     return v
 
 
@@ -55,9 +65,40 @@ class OrderStatus(str, Enum):
 
 class FileStatus(str, Enum):
     UPLOADED   = "UPLOADED"     # Raw file in S3
+    PREPARING  = "PREPARING"    # Being oriented / cropped / enhanced
+    PREPARED   = "PREPARED"     # Enhanced frame ready for Runway
     PROCESSING = "PROCESSING"   # Submitted to Runway ML
     DONE       = "DONE"         # Clip generated successfully
+    SKIPPED    = "SKIPPED"      # Customer video — bypasses Runway, montage uses it directly
     FAILED     = "FAILED"       # Runway job failed
+
+
+# ── MEDIA KIND ────────────────────────────────────────────────────────────────
+
+class MediaKind(str, Enum):
+    """What kind of upload this is, which decides its route through the pipeline.
+
+    Images go through prep and Runway. Videos skip both — there is nothing to
+    animate — and are trimmed straight into the montage.
+    """
+    IMAGE = "IMAGE"
+    VIDEO = "VIDEO"
+
+
+# Customer video clips are capped to match the length of a generated clip, so
+# one long home video cannot dominate the montage.
+MAX_VIDEO_SECONDS = 5.0
+
+IMAGE_CONTENT_TYPES = {
+    "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic", "image/heif",
+}
+VIDEO_CONTENT_TYPES = {"video/mp4", "video/quicktime", "video/mov"}
+
+
+def media_kind_for(content_type: str) -> str:
+    """Route an upload by MIME type. Unknown types are treated as images —
+    create_order validates against the allow-lists before this is reached."""
+    return MediaKind.VIDEO if content_type in VIDEO_CONTENT_TYPES else MediaKind.IMAGE
 
 
 # ── ORDER ─────────────────────────────────────────────────────────────────────
@@ -136,10 +177,27 @@ class OrderFile:
     # Upload
     original_filename: str = ""
     content_type: str = ""       # e.g. "image/jpeg"
-    s3_key: str = ""             # Key in uploads bucket
+    media_kind: str = MediaKind.IMAGE
+    s3_key: str = ""             # Key in uploads bucket — always the untouched original
     file_size_bytes: int = 0
     caption: str = ""            # Customer-provided caption (used as Runway prompt)
     sort_order: int = 0          # Order in the montage
+
+    # Framing chosen in the upload UI, as fractions of the source image:
+    # {"x": 0.1, "y": 0.0, "w": 0.8, "h": 0.45}. Stored as a rectangle rather
+    # than a pre-cropped file so the full-resolution original stays available
+    # for enhancement and the crop can be revised without a re-upload.
+    crop_rect: dict = field(default_factory=dict)
+
+    # Video trimming. Customer videos are capped at MAX_VIDEO_SECONDS; this is
+    # the offset the customer chose as the start of that window.
+    trim_start_seconds: float = 0.0
+    source_duration_seconds: float = 0.0
+
+    # Image prep output
+    prepared_s3_key: str = ""    # 1280x720 frame actually submitted to Runway
+    assessment: dict = field(default_factory=dict)   # ImageAssessment.to_dict()
+    restore_meta: dict = field(default_factory=dict) # what restoration ran, if any
 
     # Runway ML
     runway_task_id: str = ""

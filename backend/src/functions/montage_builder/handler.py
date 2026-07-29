@@ -26,7 +26,9 @@ import boto3
 import requests
 
 from shared.db import get_order, get_order_files, update_order_status
-from shared.models import OrderStatus, FileStatus, now_iso
+from shared.models import (
+    OrderStatus, FileStatus, MediaKind, MAX_VIDEO_SECONDS, now_iso,
+)
 from shared.qr_utils import generate_and_upload_qr
 from shared.email_utils import send_video_ready
 
@@ -34,6 +36,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 VIDEOS_BUCKET = os.environ.get("VIDEOS_BUCKET", "")
+UPLOADS_BUCKET = os.environ.get("UPLOADS_BUCKET", "")
 VIDEOS_CF_URL = os.environ.get("VIDEOS_CF_URL", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://memories.wrightideas.co")
 MUSIC_KEY_PREFIX = os.environ.get("MUSIC_KEY_PREFIX", "music/")
@@ -42,18 +45,15 @@ s3 = boto3.client("s3")
 
 
 def lambda_handler(event, context):
-    results = {"batchItemFailures": []}
+    """Invoked directly by the state machine as the final step.
 
-    for record in event.get("Records", []):
-        message_id = record["messageId"]
-        try:
-            body = json.loads(record["body"])
-            _build_montage(body["order_id"])
-        except Exception as e:
-            logger.error(f"Montage failed for record {message_id}: {e}", exc_info=True)
-            results["batchItemFailures"].append({"itemIdentifier": message_id})
-
-    return results
+    Input: {"order_id": "..."}. Raising here fails the execution, which is the
+    correct behaviour — by this point the customer has paid and there is no
+    partial result worth delivering.
+    """
+    order_id = event["order_id"]
+    _build_montage(order_id)
+    return {"order_id": order_id, "status": OrderStatus.COMPLETE.value}
 
 
 def _build_montage(order_id: str) -> None:
@@ -65,25 +65,38 @@ def _build_montage(order_id: str) -> None:
         raise ValueError(f"Order {order_id} not found")
 
     files = get_order_files(order_id)
-    done_files = sorted(
-        [f for f in files if f.status == FileStatus.DONE],
+
+    # Two kinds of usable material:
+    #   DONE    — a Runway clip generated from a photo
+    #   SKIPPED — a customer-uploaded video, which never went to Runway
+    # Both are ordered together by sort_order so the montage follows the
+    # sequence the customer chose, regardless of how each item was produced.
+    usable = sorted(
+        [
+            f for f in files
+            if (f.status == FileStatus.DONE and f.generated_video_s3_key)
+            or (f.status == FileStatus.SKIPPED and f.media_kind == MediaKind.VIDEO)
+        ],
         key=lambda f: f.sort_order,
     )
 
-    if not done_files:
-        raise ValueError(f"No completed clips for order {order_id}")
+    if not usable:
+        raise ValueError(f"No usable clips for order {order_id}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
         clip_paths = []
 
-        # ── 1. Download clips from S3 ─────────────────────────────────────────
-        logger.info(f"Downloading {len(done_files)} clips…")
-        for i, f in enumerate(done_files):
+        # ── 1. Collect source clips ───────────────────────────────────────────
+        logger.info("Collecting %s clips…", len(usable))
+        for i, f in enumerate(usable):
             local_path = tmp / f"clip_{i:02d}.mp4"
-            s3.download_file(VIDEOS_BUCKET, f.generated_video_s3_key, str(local_path))
+            if f.media_kind == MediaKind.VIDEO:
+                _fetch_customer_video(f, local_path)
+            else:
+                s3.download_file(VIDEOS_BUCKET, f.generated_video_s3_key, str(local_path))
             clip_paths.append(local_path)
-            logger.info(f"  Downloaded clip {i+1}/{len(done_files)}")
+            logger.info("  Clip %s/%s ready", i + 1, len(usable))
 
         # ── 2. Create title card ──────────────────────────────────────────────
         title_clip = tmp / "title.mp4"
@@ -127,9 +140,11 @@ def _build_montage(order_id: str) -> None:
                 "-i", str(raw_output),
                 "-i", str(music_path),
                 "-filter_complex",
-                "[1:a]volume=0.3,afade=t=in:st=0:d=2,afade=t=out:st=max(0\\,duration-3):d=3[music];"
-                "[0:a]volume=0.0[silent];"   # no original audio from clips
-                "[music]anull[a]",
+                # The clips' own audio is already silent (see _normalise_clip),
+                # so the music is simply mapped over the top. The previous
+                # version declared a [silent] label here and never used it,
+                # which FFmpeg treats as an unconnected output pad.
+                "[1:a]volume=0.3,afade=t=in:st=0:d=2[a]",
                 "-map", "0:v",
                 "-map", "[a]",
                 "-c:v", "copy",
@@ -268,16 +283,68 @@ def _create_title_card(
         pass
 
 
+def _fetch_customer_video(f, dest: Path) -> None:
+    """Download a customer-uploaded video and trim it to the allowed window.
+
+    Trimming happens here rather than in the browser: the montage Lambda already
+    carries FFmpeg, whereas client-side trimming would mean shipping ffmpeg.wasm
+    (~30MB) to a grieving customer on a phone. The customer picks the start
+    point in the UI; this cuts MAX_VIDEO_SECONDS from there.
+
+    `-ss` before `-i` seeks the input, which is fast but snaps to a keyframe.
+    That is the right trade for a home video — a fraction of a second either way
+    is invisible, and accurate seeking would mean decoding the whole file.
+    """
+    raw = dest.with_name(dest.stem + "_raw.mp4")
+    s3.download_file(UPLOADS_BUCKET, f.s3_key, str(raw))
+
+    start = max(0.0, float(f.trim_start_seconds or 0.0))
+    logger.info(
+        "Trimming customer video %s from %.1fs for %.1fs",
+        f.file_id, start, MAX_VIDEO_SECONDS,
+    )
+    _run_ffmpeg([
+        "-ss", f"{start:.2f}",
+        "-i", str(raw),
+        "-t", f"{MAX_VIDEO_SECONDS:.2f}",
+        # Re-encoded rather than stream-copied: a copy would start at the
+        # nearest keyframe and can produce a corrupt leading segment on concat.
+        "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+        "-pix_fmt", "yuv420p",
+        # Audio is dropped deliberately — the montage plays one continuous
+        # music bed, and cutting between clip audio and music is jarring.
+        "-an",
+        str(dest),
+    ])
+    raw.unlink(missing_ok=True)
+
+
 def _normalise_clip(input_path: str, output_path: str) -> None:
-    """Normalise a clip to consistent resolution, framerate, and codec."""
+    """Normalise a clip to consistent resolution, framerate, and codec.
+
+    Portrait sources are letterboxed over a blurred copy of themselves rather
+    than black bars — the same treatment `image_prep` gives portrait photos, so
+    generated and uploaded material look like one piece. Customer videos are the
+    only way a non-16:9 clip reaches this point, since prepared photos are
+    already 1280x720.
+
+    An explicit silent audio track is generated for every clip. Without it,
+    concatenating clips that have audio with clips that do not produces
+    stream-count mismatches and silent dropouts.
+    """
     _run_ffmpeg([
         "-i", input_path,
-        "-vf", "scale=1280:720:force_original_aspect_ratio=decrease,"
-               "pad=1280:720:(ow-iw)/2:(oh-ih)/2:black,"
-               "fps=24",
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+        "-filter_complex",
+        "[0:v]scale=1280:720:force_original_aspect_ratio=increase,"
+        "crop=1280:720,boxblur=20:2,eq=brightness=-0.25[bg];"
+        "[0:v]scale=1280:720:force_original_aspect_ratio=decrease[fg];"
+        "[bg][fg]overlay=(W-w)/2:(H-h)/2,fps=24[v]",
+        "-map", "[v]", "-map", "1:a",
         "-c:v", "libx264", "-preset", "fast", "-crf", "23",
         "-c:a", "aac", "-ar", "44100", "-ac", "2",
         "-pix_fmt", "yuv420p",
+        "-shortest",
         output_path,
     ])
 

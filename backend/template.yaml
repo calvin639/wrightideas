@@ -44,13 +44,35 @@ Parameters:
 
   RunwayModel:
     Type: String
-    Default: gen4.5
-    Description: "Runway ML model for image-to-video generation (gen4.5, gen4_turbo, gen3a_turbo, veo3.1, veo3.1_fast, veo3)"
+    Default: seedance2
+    Description: >
+      Runway ML model for image-to-video generation. seedance2 is the default
+      because it is the model documented to accept promptImage as a first/last
+      keyframe array, which is what pins subject identity across the clip.
+      Changing this to a model outside KEYFRAME_MODELS (see video_generator)
+      silently loses that guarantee.
 
+  RestoreWeight:
+    Type: String
+    Default: "0.5"
+    Description: >
+      How far GFPGAN's reconstruction is blended back toward the real face
+      (0-1). Higher reconstructs more and risks altering a face the customer
+      knows intimately. Lower is more faithful but softer.
+
+  SharpnessSoft:
+    Type: String
+    Default: "250"
+    Description: >
+      Sharpness (variance-of-Laplacian) below which an image is handed to face
+      restoration. Raise to restore more photos, lower to restore fewer.
+
+# NOTE: Runtime, Architectures and Layers are deliberately NOT set here.
+# ImagePrepFunction is a container image, and Lambda rejects all three for
+# PackageType: Image. Globals cannot be unset per-resource, so each zip function
+# declares them individually — see the ZipFunctionDefaults comment below.
 Globals:
   Function:
-    Runtime: python3.12
-    Architectures: [x86_64]
     Timeout: 30
     MemorySize: 256
     Environment:
@@ -59,8 +81,6 @@ Globals:
         ORDERS_TABLE: !Ref OrdersTable
         UPLOADS_BUCKET: !Ref UploadsBucket
         VIDEOS_BUCKET: !Ref VideosBucket
-        VIDEO_GENERATION_QUEUE_URL: !Ref VideoGenerationQueue
-        MONTAGE_QUEUE_URL: !Ref MontageQueue
         FRONTEND_URL: !Ref FrontendUrl
         VIDEOS_CF_URL: !Sub 'https://${VideosCloudFrontDistribution.DomainName}'
         SES_FROM_EMAIL: !Ref SesFromEmail
@@ -71,8 +91,6 @@ Globals:
         RUNWAY_WEBHOOK_URL: !Ref RunwayWebhookUrl
         RUNWAY_MODEL: !Ref RunwayModel
         MUSIC_KEY_PREFIX: music/
-    Layers:
-      - !Ref DependenciesLayer
   Api:
     Cors:
       AllowOrigin: !Sub "'${FrontendUrl}'"
@@ -207,7 +225,8 @@ Resources:
 
   VideosBucketPolicy:
     Type: AWS::S3::BucketPolicy
-    DependsOn: VideosCloudFrontDistribution
+    # No DependsOn needed — the !Sub on the distribution ID in the condition
+    # below already establishes the ordering.
     Properties:
       Bucket: !Ref VideosBucket
       PolicyDocument:
@@ -263,35 +282,10 @@ Resources:
 
   # ── SQS QUEUES ────────────────────────────────────────────────────────────────
 
-  VideoGenerationDLQ:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub 'memories-video-gen-dlq-${Environment}'
-      MessageRetentionPeriod: 1209600  # 14 days
-
-  VideoGenerationQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub 'memories-video-generation-${Environment}'
-      VisibilityTimeout: 1200  # 20 min (must be >= 6x Lambda timeout of 180s)
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt VideoGenerationDLQ.Arn
-        maxReceiveCount: 3
-
-  MontageDLQ:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub 'memories-montage-dlq-${Environment}'
-      MessageRetentionPeriod: 1209600
-
-  MontageQueue:
-    Type: AWS::SQS::Queue
-    Properties:
-      QueueName: !Sub 'memories-montage-${Environment}'
-      VisibilityTimeout: 1800  # 30 min (FFmpeg can take a while)
-      RedrivePolicy:
-        deadLetterTargetArn: !GetAtt MontageDLQ.Arn
-        maxReceiveCount: 3
+  # The VideoGeneration and Montage SQS queues were removed when the pipeline
+  # moved to Step Functions. The Map state IS the fan-out and the join, so the
+  # queues, the manual "are all files done?" scans, and the race between the
+  # Runway webhook and the EventBridge poller all went with them.
 
   # ── SHARED IAM ROLE ───────────────────────────────────────────────────────────
 
@@ -333,15 +327,18 @@ Resources:
                 Resource:
                   - !Sub '${UploadsBucket.Arn}/*'
                   - !Sub '${VideosBucket.Arn}/*'
+              # The Stripe webhook starts the pipeline execution. Scoped to this
+              # one state machine rather than '*'.
+              #
+              # The ARN is constructed rather than !Ref'd on purpose: the state
+              # machine's role grants InvokeFunction on the Lambdas that use
+              # this role, so referencing it here would close a dependency loop
+              # (function -> role -> state machine -> function). The name is
+              # fixed by the Name property on MemoriesPipeline.
               - Effect: Allow
                 Action:
-                  - sqs:SendMessage
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                Resource:
-                  - !GetAtt VideoGenerationQueue.Arn
-                  - !GetAtt MontageQueue.Arn
+                  - states:StartExecution
+                Resource: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:memories-pipeline-${Environment}'
               - Effect: Allow
                 Action:
                   - ses:SendEmail
@@ -368,6 +365,10 @@ Resources:
     Properties:
       FunctionName: !Sub 'memories-create-order-${Environment}'
       CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
       Handler: functions.create_order.handler.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Description: Create a new memorial stone order and generate S3 presigned upload URLs
@@ -384,6 +385,10 @@ Resources:
     Properties:
       FunctionName: !Sub 'memories-get-order-${Environment}'
       CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
       Handler: functions.get_order.handler.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Description: Get order status and details
@@ -400,6 +405,10 @@ Resources:
     Properties:
       FunctionName: !Sub 'memories-create-checkout-${Environment}'
       CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
       Handler: functions.create_checkout.handler.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Description: Create a Stripe Checkout session for an order
@@ -416,9 +425,17 @@ Resources:
     Properties:
       FunctionName: !Sub 'memories-stripe-webhook-${Environment}'
       CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
       Handler: functions.stripe_webhook.handler.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      Description: Handle Stripe payment webhooks
+      Description: Handle Stripe payment webhooks and start the pipeline
+      Environment:
+        Variables:
+          # Constructed, not !Ref'd — see the IAM policy comment above.
+          STATE_MACHINE_ARN: !Sub 'arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:memories-pipeline-${Environment}'
       Events:
         StripeWebhook:
           Type: HttpApi
@@ -432,6 +449,10 @@ Resources:
     Properties:
       FunctionName: !Sub 'memories-runway-webhook-${Environment}'
       CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
       Handler: functions.runway_webhook.handler.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Description: Handle Runway ML task completion webhooks
@@ -445,19 +466,66 @@ Resources:
 
   # ── PROCESSING FUNCTIONS ──────────────────────────────────────────────────────
 
+  # The only container-image function in the stack. It carries torch, so that
+  # Real-ESRGAN and GFPGAN can restore degraded photos before Runway sees them —
+  # roughly 3GB installed, far past the 250MB layer limit.
+  #
+  # arm64 (Graviton2): ~20% cheaper, and it builds natively on Apple Silicon
+  # instead of through QEMU emulation. It uses no Lambda layer — its
+  # dependencies are baked into the image.
+  ImagePrepFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-image-prep-${Environment}'
+      PackageType: Image
+      Architectures: [arm64]
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Orient, crop, enhance and restore one uploaded photo before Runway
+      # 3008MB is this account's ceiling — the legacy default for the Lambda
+      # "Function memory size" quota. It is NOT enough to run generative
+      # restoration, which peaks around 3.8GB (see MIN_RESTORE_MEMORY_MB in
+      # image_restore.py for the measurements). At this size the function
+      # detects that and runs deterministic processing only.
+      #
+      # TO ENABLE RESTORATION: raise the quota to 10240 in Service Quotas
+      # (lambda / L-B99A9384), then change this to 10240 and redeploy. The
+      # memory check reads the live value, so no code change is needed — and
+      # 10240MB also buys ~6 vCPU rather than ~2, which cuts restore time
+      # roughly threefold.
+      Timeout: 900
+      MemorySize: 3008
+      EphemeralStorage:
+        Size: 2048
+      Environment:
+        Variables:
+          ENABLE_RESTORE: "true"
+          RESTORE_WEIGHT: !Ref RestoreWeight
+          SHARPNESS_SOFT: !Ref SharpnessSoft
+          MODEL_DIR: /opt/ml/models
+          # Matched to the ~2 vCPU that 3008MB provides. Oversubscribing torch
+          # threads past the available cores makes it slower, not faster.
+          TORCH_THREADS: "2"
+          KEEP_SOURCE_COPY: "true"
+    Metadata:
+      Dockerfile: functions/image_prep/Dockerfile
+      DockerContext: ./src
+      DockerTag: !Sub 'image-prep-${Environment}'
+
   VideoGeneratorFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub 'memories-video-generator-${Environment}'
       CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
       Handler: functions.video_generator.handler.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
-      Description: Submit files to Runway ML for image-to-video conversion
-      # Per-image Bedrock prompt generation adds ~2-4s per file, and files
-      # iterate serially. 180s covers a max-size order (~10 stones) comfortably.
-      # SQS VisibilityTimeout (600s) must remain >= 6x this value.
-      Timeout: 180
-      # 1024MB gives us headroom for Pillow image resize on large phone photos.
+      Description: Submit one file to Runway and poll it — driven by the state machine
+      # Now invoked once per file rather than once per order, so this only ever
+      # covers a single Bedrock prompt call plus one Runway request.
+      Timeout: 120
       MemorySize: 1024
       Environment:
         Variables:
@@ -469,20 +537,21 @@ Resources:
           # Model access must be enabled in all EU regions via the Bedrock console.
           BEDROCK_PROMPT_MODEL: "eu.anthropic.claude-haiku-4-5-20251001-v1:0"
           BEDROCK_REGION: !Ref AWS::Region
-      Events:
-        VideoGenerationQueue:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt VideoGenerationQueue.Arn
-            BatchSize: 1
-            FunctionResponseTypes:
-              - ReportBatchItemFailures
+          # Send the prepared frame as both first and last keyframe. Set to
+          # "false" to fall back to single-frame submission.
+          ENABLE_KEYFRAMES: "true"
+          CLIP_DURATION: "5"
+      # No Events — invoked directly by the state machine.
 
   MontageBuilderFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub 'memories-montage-builder-${Environment}'
       CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
       Handler: functions.montage_builder.handler.lambda_handler
       Role: !GetAtt LambdaExecutionRole.Arn
       Description: Stitch generated clips into final memorial video using FFmpeg
@@ -495,34 +564,219 @@ Resources:
       # Layers:
       #   - arn:aws:lambda:eu-west-1:ACCOUNT_ID:layer:ffmpeg:1
       # See README for instructions on building the FFmpeg layer
-      Events:
-        MontageQueue:
-          Type: SQS
-          Properties:
-            Queue: !GetAtt MontageQueue.Arn
-            BatchSize: 1
-            FunctionResponseTypes:
-              - ReportBatchItemFailures
+      # No Events — invoked directly by the state machine as the final step.
 
-  RunwayPollerFunction:
-    Type: AWS::Serverless::Function
+  # RunwayPollerFunction was removed. Its job — catching Runway tasks whose
+  # webhook never arrived — is now done by the Wait/Poll loop inside the state
+  # machine, which polls only the tasks belonging to a live execution rather
+  # than scanning every PROCESSING order every five minutes.
+
+  # ── STATE MACHINE ─────────────────────────────────────────────────────────────
+
+  StateMachineRole:
+    Type: AWS::IAM::Role
     Properties:
-      FunctionName: !Sub 'memories-runway-poller-${Environment}'
-      CodeUri: src/
-      Handler: functions.runway_poller.handler.lambda_handler
-      Role: !GetAtt LambdaExecutionRole.Arn
-      Description: Poll Runway ML every 5 min for missed webhook callbacks — Runway webhooks don't reliably reach us, so the poller is the primary completion signal, not just a fallback
-      Timeout: 120
-      Events:
-        # The poller is idempotent — it scans for orders in PROCESSING and
-        # only acts on files whose Runway task reports DONE. Safe to run
-        # frequently; cost is negligible (one Lambda invocation per 5 min).
-        PollSchedule:
-          Type: Schedule
-          Properties:
-            Schedule: rate(5 minutes)
-            Description: Poll Runway every 5 min for missed webhook callbacks
-            Enabled: true
+      RoleName: !Sub 'memories-pipeline-role-${Environment}'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: states.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokePipelineFunctions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: lambda:InvokeFunction
+                Resource:
+                  - !GetAtt ImagePrepFunction.Arn
+                  - !GetAtt VideoGeneratorFunction.Arn
+                  - !GetAtt MontageBuilderFunction.Arn
+
+  # Orchestrates one order end to end.
+  #
+  # Two Map states do the fan-out. The important property is that a Map state is
+  # also the join: it completes when every item completes, which is what the old
+  # code was hand-rolling with all_files_complete() scans from two different
+  # Lambdas — and getting wrong, because both could fire a montage.
+  #
+  # ToleratedFailurePercentage expresses the partial-montage rule declaratively:
+  # up to 60% of photos may fail and the montage still runs with what survived.
+  MemoriesPipeline:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Name: !Sub 'memories-pipeline-${Environment}'
+      Role: !GetAtt StateMachineRole.Arn
+      Type: STANDARD
+      Definition:
+        Comment: Prepare photos, generate clips, build the montage
+        StartAt: PrepareFiles
+        TimeoutSeconds: 7200
+        States:
+
+          PrepareFiles:
+            Type: Map
+            ItemsPath: $.files
+            # Bounded because each prep invocation takes ~6 vCPUs. Higher
+            # concurrency just queues at the account level.
+            MaxConcurrency: 4
+            ToleratedFailurePercentage: 60
+            ItemSelector:
+              order_id.$: $.order_id
+              file_id.$: $$.Map.Item.Value.file_id
+            ItemProcessor:
+              ProcessorConfig:
+                Mode: INLINE
+              StartAt: PrepFile
+              States:
+                PrepFile:
+                  Type: Task
+                  Resource: !GetAtt ImagePrepFunction.Arn
+                  Retry:
+                    - ErrorEquals: [Lambda.TooManyRequestsException, Lambda.ServiceException]
+                      IntervalSeconds: 5
+                      MaxAttempts: 3
+                      BackoffRate: 2
+                    # A cold start on a 3GB image can exceed the invoke timeout.
+                    - ErrorEquals: [States.Timeout]
+                      IntervalSeconds: 10
+                      MaxAttempts: 2
+                  Catch:
+                    - ErrorEquals: [States.ALL]
+                      ResultPath: $.error
+                      Next: PrepFailed
+                  End: true
+                PrepFailed:
+                  Type: Pass
+                  Parameters:
+                    file_id.$: $.file_id
+                    status: FAILED
+                  End: true
+            ResultPath: $.prepared
+            Next: GenerateClips
+
+          GenerateClips:
+            Type: Map
+            ItemsPath: $.prepared
+            MaxConcurrency: 4
+            ToleratedFailurePercentage: 60
+            ItemSelector:
+              order_id.$: $.order_id
+              file.$: $$.Map.Item.Value
+            ItemProcessor:
+              ProcessorConfig:
+                Mode: INLINE
+              StartAt: NeedsGeneration
+              States:
+
+                # Videos (SKIPPED) and failed preps bypass Runway entirely.
+                NeedsGeneration:
+                  Type: Choice
+                  Choices:
+                    - Variable: $.file.status
+                      StringEquals: PREPARED
+                      Next: SubmitClip
+                  Default: NoGeneration
+
+                NoGeneration:
+                  Type: Pass
+                  Parameters:
+                    file_id.$: $.file.file_id
+                    state.$: $.file.status
+                  End: true
+
+                SubmitClip:
+                  Type: Task
+                  Resource: !GetAtt VideoGeneratorFunction.Arn
+                  Parameters:
+                    action: submit
+                    order_id.$: $.order_id
+                    file_id.$: $.file.file_id
+                  ResultPath: $.submit
+                  Retry:
+                    - ErrorEquals: [Lambda.TooManyRequestsException, Lambda.ServiceException]
+                      IntervalSeconds: 5
+                      MaxAttempts: 3
+                      BackoffRate: 2
+                  Catch:
+                    - ErrorEquals: [States.ALL]
+                      ResultPath: $.error
+                      Next: GenerationFailed
+                  Next: SubmitAccepted
+
+                SubmitAccepted:
+                  Type: Choice
+                  Choices:
+                    - Variable: $.submit.state
+                      StringEquals: RUNNING
+                      Next: WaitForClip
+                  Default: GenerationSettled
+
+                # Runway clips take roughly 1-3 minutes. 30s keeps the
+                # transition count low while still finishing promptly.
+                WaitForClip:
+                  Type: Wait
+                  Seconds: 30
+                  Next: PollClip
+
+                PollClip:
+                  Type: Task
+                  Resource: !GetAtt VideoGeneratorFunction.Arn
+                  Parameters:
+                    action: poll
+                    order_id.$: $.order_id
+                    file_id.$: $.file.file_id
+                    task_id.$: $.submit.task_id
+                  ResultPath: $.poll
+                  Retry:
+                    - ErrorEquals: [States.ALL]
+                      IntervalSeconds: 15
+                      MaxAttempts: 3
+                      BackoffRate: 2
+                  Catch:
+                    - ErrorEquals: [States.ALL]
+                      ResultPath: $.error
+                      Next: GenerationFailed
+                  Next: ClipSettled
+
+                ClipSettled:
+                  Type: Choice
+                  Choices:
+                    - Variable: $.poll.state
+                      StringEquals: RUNNING
+                      Next: WaitForClip
+                  Default: GenerationSettled
+
+                GenerationSettled:
+                  Type: Pass
+                  Parameters:
+                    file_id.$: $.file.file_id
+                    state: SETTLED
+                  End: true
+
+                GenerationFailed:
+                  Type: Pass
+                  Parameters:
+                    file_id.$: $.file.file_id
+                    state: FAILED
+                  End: true
+            ResultPath: $.generated
+            Next: BuildMontage
+
+          BuildMontage:
+            Type: Task
+            Resource: !GetAtt MontageBuilderFunction.Arn
+            Parameters:
+              order_id.$: $.order_id
+            Retry:
+              - ErrorEquals: [Lambda.TooManyRequestsException, Lambda.ServiceException]
+                IntervalSeconds: 10
+                MaxAttempts: 2
+                BackoffRate: 2
+            End: true
 
 # ── OUTPUTS ────────────────────────────────────────────────────────────────────
 
@@ -545,13 +799,11 @@ Outputs:
     Description: DynamoDB table name
     Value: !Ref OrdersTable
 
-  VideoGenerationQueueUrl:
-    Description: SQS queue for video generation jobs
-    Value: !Ref VideoGenerationQueue
-
-  MontageQueueUrl:
-    Description: SQS queue for montage building jobs
-    Value: !Ref MontageQueue
+  PipelineStateMachineArn:
+    Description: Step Functions state machine that runs an order end to end
+    Value: !Ref MemoriesPipeline
+    Export:
+      Name: !Sub 'memories-pipeline-arn-${Environment}'
 
   VideosCloudfrontUrl:
     Description: CloudFront distribution URL for the videos bucket

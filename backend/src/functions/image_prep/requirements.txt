@@ -1,0 +1,27 @@
+# Generative restoration stack for the image_prep container function.
+#
+# Pinned deliberately — this combination is known to work together on
+# Python 3.12 / aarch64. See the Dockerfile for two constraints that are not
+# expressible here:
+#   1. torch must be installed BEFORE basicsr (basicsr imports torch at build).
+#   2. basicsr 1.4.2 imports torchvision.transforms.functional_tensor, which
+#      torchvision removed in 0.17 — the Dockerfile patches it.
+#
+# torch 2.2.2 is the earliest release with Python 3.12 wheels, which forces
+# torchvision >= 0.17 and therefore forces that patch.
+
+torch==2.2.2
+torchvision==0.17.2
+
+# numpy 2.x breaks the ABI that torch 2.2 and opencv were built against.
+numpy<2
+
+opencv-python-headless==4.9.0.80
+Pillow>=10.0.0
+
+basicsr==1.4.2
+facexlib==0.3.0
+gfpgan==1.3.8
+realesrgan==0.3.0
+
+boto3>=1.34.0

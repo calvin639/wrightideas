@@ -28,7 +28,7 @@ parameter_overrides = [
   "Environment=dev",
   "FrontendUrl=https://memories.wrightideas.biz",
   "RunwayWebhookUrl=https://621yr9lwh0.execute-api.eu-west-1.amazonaws.com/dev/webhooks/runway",
-  "RunwayModel=gen3a_turbo"
+  "RunwayModel=seedance2"
 ]
 
 # ── PROD ─────────────────────────────────────────────────────────────────────

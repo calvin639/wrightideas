@@ -65,13 +65,49 @@ else
 fi
 
 # ── Environment-specific settings ────────────────────────────────────────────
-if [ "$ENV" = "prod" ]; then
-  DEFAULT_MODEL="gen4.5"
-else
-  DEFAULT_MODEL="gen3a_turbo"
+# seedance2 in both environments: it is the model documented to accept the
+# first/last keyframe array, which is what stops the subject drifting across
+# the clip. Overriding this to a model without keyframe support silently loses
+# that guarantee — see KEYFRAME_MODELS in video_generator.
+DEFAULT_MODEL="seedance2"
+MODEL="${RUNWAY_MODEL:-$DEFAULT_MODEL}"
+
+# ── ECR (for the image_prep container function) ──────────────────────────────
+# ImagePrepFunction ships as a container image because it carries torch for
+# Real-ESRGAN and GFPGAN. SAM needs a repository to push to, and an
+# authenticated Docker client to push with.
+ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+ECR_REPO="memories-image-prep-${ENV}"
+ECR_URI="${ACCOUNT_ID}.dkr.ecr.${AWS_REGION:-eu-west-1}.amazonaws.com/${ECR_REPO}"
+REGION="${AWS_REGION:-eu-west-1}"
+
+if ! docker info >/dev/null 2>&1; then
+  echo "❌ Docker daemon is not running — start Docker Desktop and retry."
+  echo "   The image_prep function is a container image and cannot be built without it."
+  exit 1
 fi
 
-MODEL="${RUNWAY_MODEL:-$DEFAULT_MODEL}"
+# Create on first deploy; harmless on every deploy after.
+if ! aws ecr describe-repositories --repository-names "$ECR_REPO" --region "$REGION" >/dev/null 2>&1; then
+  echo "📦 Creating ECR repository $ECR_REPO"
+  aws ecr create-repository \
+    --repository-name "$ECR_REPO" \
+    --region "$REGION" \
+    --image-scanning-configuration scanOnPush=true \
+    >/dev/null
+
+  # Without this the repo accumulates every image ever built, at $0.10/GB/month
+  # for images around 3GB each.
+  aws ecr put-lifecycle-policy \
+    --repository-name "$ECR_REPO" \
+    --region "$REGION" \
+    --lifecycle-policy-text '{"rules":[{"rulePriority":1,"description":"Keep last 3 images","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":3},"action":{"type":"expire"}}]}' \
+    >/dev/null
+fi
+
+echo "🔑 Authenticating Docker to ECR"
+aws ecr get-login-password --region "$REGION" \
+  | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
 echo "🚀 Deploying to environment: $ENV"
 echo "   Stripe key:   ${STRIPE_KEY:0:10}..."
@@ -94,9 +130,17 @@ OVERRIDES=(
   "RunwayModel=$MODEL"
 )
 
+# Build before deploying. `sam deploy` reads .aws-sam/build/template.yaml, not
+# template.yaml — without this, running the script directly (rather than via
+# `make deploy`, which builds first) silently deploys whatever was last built
+# and template edits appear to have no effect.
+echo "🔨 Building"
+sam build --cached --parallel
+
 sam deploy \
   --config-env "$ENV" \
   --parameter-overrides "${OVERRIDES[@]}" \
+  --image-repository "$ECR_URI" \
   2>&1
 
 echo ""

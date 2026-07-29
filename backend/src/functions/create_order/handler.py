@@ -43,7 +43,10 @@ import logging
 import boto3
 from botocore.exceptions import ClientError
 
-from shared.models import Order, OrderFile
+from shared.models import (
+    Order, OrderFile, media_kind_for, MediaKind,
+    IMAGE_CONTENT_TYPES, VIDEO_CONTENT_TYPES, MAX_VIDEO_SECONDS,
+)
 from shared.db import create_order, create_order_file
 from shared.pricing import calculate_price_cents, STONE_STYLES
 from shared.response import ok, created, error, server_error
@@ -55,10 +58,34 @@ s3 = boto3.client("s3")
 UPLOADS_BUCKET = os.environ.get("UPLOADS_BUCKET", "")
 PRESIGNED_URL_EXPIRY = 3600  # 1 hour
 
-ALLOWED_IMAGE_TYPES = {"image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic"}
-ALLOWED_VIDEO_TYPES = {"video/mp4", "video/quicktime", "video/mov"}
+ALLOWED_IMAGE_TYPES = IMAGE_CONTENT_TYPES
+ALLOWED_VIDEO_TYPES = VIDEO_CONTENT_TYPES
 ALLOWED_TYPES = ALLOWED_IMAGE_TYPES | ALLOWED_VIDEO_TYPES
 MAX_FILES = 20
+
+
+def _parse_crop_rect(raw) -> dict:
+    """Validate a crop rectangle from the upload UI.
+
+    Expected as fractions of the source image so it stays correct no matter what
+    resolution the browser previewed at. Anything malformed returns {} rather
+    than erroring — losing a crop means automatic framing is used, which is a
+    far better outcome than rejecting a paid order over a bad drag gesture.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    try:
+        rect = {k: float(raw[k]) for k in ("x", "y", "w", "h")}
+    except (KeyError, TypeError, ValueError):
+        return {}
+
+    if rect["w"] <= 0 or rect["h"] <= 0:
+        return {}
+    if not all(0.0 <= rect[k] <= 1.0 for k in ("x", "y")):
+        return {}
+    if rect["x"] + rect["w"] > 1.001 or rect["y"] + rect["h"] > 1.001:
+        return {}
+    return rect
 
 
 def lambda_handler(event, context):
@@ -132,13 +159,28 @@ def lambda_handler(event, context):
         filename = f_input.get("filename", f"file_{idx}")
         content_type = f_input["content_type"]
         caption = f_input.get("caption", "").strip()
+        kind = media_kind_for(content_type)
+
+        # Trimming only applies to videos, and only the start point is chosen —
+        # the length is fixed at MAX_VIDEO_SECONDS so one home video cannot
+        # dominate the montage.
+        trim_start = 0.0
+        if kind == MediaKind.VIDEO:
+            try:
+                trim_start = max(0.0, float(f_input.get("trim_start_seconds", 0) or 0))
+            except (TypeError, ValueError):
+                trim_start = 0.0
 
         order_file = OrderFile(
             order_id=order.order_id,
             original_filename=filename,
             content_type=content_type,
+            media_kind=kind,
             caption=caption,
             sort_order=idx,
+            crop_rect=_parse_crop_rect(f_input.get("crop_rect")),
+            trim_start_seconds=trim_start,
+            source_duration_seconds=float(f_input.get("duration_seconds", 0) or 0),
             s3_key=f"uploads/{order.order_id}/{idx:02d}_{filename}",
         )
         create_order_file(order_file)

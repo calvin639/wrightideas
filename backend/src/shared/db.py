@@ -5,10 +5,30 @@ DynamoDB helper functions for Memories in Stone.
 import os
 import boto3
 from boto3.dynamodb.conditions import Key
+from decimal import Decimal
 from typing import Optional, List
 from shared.models import Order, OrderFile, OrderStatus, FileStatus, now_iso
 
 _dynamodb = None
+
+
+def _decimalise(v):
+    """Recursively convert floats to Decimal for DynamoDB.
+
+    The boto3 resource layer refuses Python floats outright ("Float types are
+    not supported"). Crop rectangles and image assessments are nested maps full
+    of them, so the conversion has to recurse rather than just check the top
+    level. `models._coerce` performs the inverse on read.
+    """
+    if isinstance(v, bool):
+        return v                      # bool is a subclass of int — leave it alone
+    if isinstance(v, float):
+        return Decimal(str(v))        # str() avoids binary float noise
+    if isinstance(v, dict):
+        return {k: _decimalise(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_decimalise(x) for x in v]
+    return v
 
 
 def get_table():
@@ -22,7 +42,7 @@ def get_table():
 
 def create_order(order: Order) -> Order:
     """Persist a new order to DynamoDB."""
-    get_table().put_item(Item=order.to_dynamo())
+    get_table().put_item(Item=_decimalise(order.to_dynamo()))
     return order
 
 
@@ -47,7 +67,7 @@ def update_order_status(order_id: str, status: str, **extra_fields) -> None:
 
     for key, value in extra_fields.items():
         update_expr += f", {key} = :{key}"
-        expr_attrs[f":{key}"] = value
+        expr_attrs[f":{key}"] = _decimalise(value)
 
     get_table().update_item(
         Key={"PK": f"ORDER#{order_id}", "SK": "METADATA"},
@@ -103,8 +123,18 @@ def set_order_stripe_session(order_id: str, session_id: str, amount_cents: int) 
 
 def create_order_file(file: OrderFile) -> OrderFile:
     """Persist a new file record."""
-    get_table().put_item(Item=file.to_dynamo())
+    get_table().put_item(Item=_decimalise(file.to_dynamo()))
     return file
+
+
+def get_order_file(order_id: str, file_id: str) -> Optional[OrderFile]:
+    """Fetch a single file record. Used by the per-file prep and generate tasks,
+    which are handed only IDs by the state machine."""
+    resp = get_table().get_item(
+        Key={"PK": f"ORDER#{order_id}", "SK": f"FILE#{file_id}"}
+    )
+    item = resp.get("Item")
+    return OrderFile.from_dynamo(item) if item else None
 
 
 def get_order_files(order_id: str) -> List[OrderFile]:
@@ -132,7 +162,7 @@ def update_file_status(
 
     for key, value in extra_fields.items():
         update_expr += f", {key} = :{key}"
-        expr_attrs[f":{key}"] = value
+        expr_attrs[f":{key}"] = _decimalise(value)
 
     # Keep GSI1 in sync when a Runway task ID is assigned
     # so get_file_by_runway_task() can look up files by task ID
@@ -160,15 +190,7 @@ def get_file_by_runway_task(runway_task_id: str) -> Optional[OrderFile]:
     return OrderFile.from_dynamo(items[0]) if items else None
 
 
-def all_files_complete(order_id: str) -> bool:
-    """Return True if every file for an order has status DONE."""
-    files = get_order_files(order_id)
-    if not files:
-        return False
-    return all(f.status == FileStatus.DONE for f in files)
-
-
-def any_file_failed(order_id: str) -> bool:
-    """Return True if any file has permanently failed."""
-    files = get_order_files(order_id)
-    return any(f.status == FileStatus.FAILED for f in files)
+# all_files_complete() and any_file_failed() were removed along with the SQS
+# pipeline. They existed so two different Lambdas could each decide whether an
+# order was finished; the Step Functions Map state is now that decision, and it
+# cannot race with itself.

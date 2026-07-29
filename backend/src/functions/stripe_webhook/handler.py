@@ -25,8 +25,8 @@ from shared.secrets import get_stripe_key, get_stripe_webhook_secret
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-VIDEO_QUEUE_URL = os.environ.get("VIDEO_GENERATION_QUEUE_URL")
-sqs = boto3.client("sqs")
+STATE_MACHINE_ARN = os.environ.get("STATE_MACHINE_ARN", "")
+sfn = boto3.client("stepfunctions")
 
 
 def lambda_handler(event, context):
@@ -110,16 +110,37 @@ def _handle_payment_success(session) -> None:
     except Exception as e:
         logger.error(f"Failed to send confirmation emails: {e}")
 
-    # Trigger video generation pipeline
+    _start_pipeline(order_id)
+
+
+def _start_pipeline(order_id: str) -> None:
+    """Kick off the Step Functions execution that processes the whole order.
+
+    The execution name is derived from the order ID, which makes this
+    idempotent for free: Stripe retries webhooks, and a second StartExecution
+    with the same name is rejected with ExecutionAlreadyExists rather than
+    producing a duplicate pipeline run (and a duplicate customer email).
+    """
+    from shared.db import get_order_files
+
     try:
-        sqs.send_message(
-            QueueUrl=VIDEO_QUEUE_URL,
-            MessageBody=json.dumps({
+        files = get_order_files(order_id)
+        if not files:
+            logger.error("Order %s has no files — not starting pipeline", order_id)
+            return
+
+        sfn.start_execution(
+            stateMachineArn=STATE_MACHINE_ARN,
+            name=f"order-{order_id}",
+            input=json.dumps({
                 "order_id": order_id,
-                "event": "payment_confirmed",
+                "files": [{"file_id": f.file_id} for f in files],
             }),
         )
-        logger.info(f"Video generation queued for order {order_id}")
+        logger.info("Pipeline started for order %s (%s files)", order_id, len(files))
+
+    except sfn.exceptions.ExecutionAlreadyExists:
+        logger.info("Pipeline already running for order %s — Stripe retry", order_id)
     except Exception as e:
-        logger.error(f"Failed to queue video generation for {order_id}: {e}")
+        logger.error("Failed to start pipeline for %s: %s", order_id, e, exc_info=True)
         # TODO: alert + manual retry via DLQ
