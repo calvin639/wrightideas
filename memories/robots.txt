@@ -1,0 +1,6 @@
+# The dev preview is gated behind HTTP Basic Auth (see
+# infra/cloudfront-basic-auth.js), so crawlers cannot read it regardless. This
+# file is defence in depth for the case where the gate is ever detached — and
+# it keeps the URL out of any crawler that reached it before the gate went up.
+User-agent: *
+Disallow: /
