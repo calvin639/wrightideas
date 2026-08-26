@@ -98,4 +98,16 @@ ENV OMP_NUM_THREADS=4 \
 COPY shared/ ${LAMBDA_TASK_ROOT}/shared/
 COPY functions/image_prep/ ${LAMBDA_TASK_ROOT}/
 
+# COPY preserves the host's file modes, and the Lambda runtime executes as a
+# non-root user. An editor that writes a source file 0600 therefore ships a
+# handler the runtime cannot read, and the function dies at import with
+# "PermissionError: [Errno 13] Permission denied: '/var/task/handler.py'" —
+# no traceback into our code, because our code never loads. Git does not track
+# read permissions, so this reproduces only on the machine that built it and
+# survives a clean clone looking fine.
+#
+# a+rX: read for everyone, execute only where it is already set (directories,
+# and any genuinely executable file) — never marks .py files executable.
+RUN chmod -R a+rX ${LAMBDA_TASK_ROOT}
+
 CMD ["handler.lambda_handler"]
