@@ -67,6 +67,33 @@ Parameters:
       Sharpness (variance-of-Laplacian) below which an image is handed to face
       restoration. Raise to restore more photos, lower to restore fewer.
 
+  RestoreWeightMin:
+    Type: String
+    Default: "0.15"
+    Description: >
+      Floor for the face-size-adaptive restore weight. Small faces (group
+      shots) are blended at this weight; large portrait faces at RestoreWeight;
+      linear in between. See image_restore._adaptive_weight.
+
+  ReviewMode:
+    Type: String
+    Default: "gate"
+    AllowedValues: ["off", "notify", "gate"]
+    Description: >
+      Human-in-the-loop review of prepared frames before Runway spend.
+      "gate" emails the admin and BLOCKS the pipeline until approved (or the
+      review window times out and auto-approves). "notify" sends the same
+      email but does not wait. "off" skips review entirely.
+
+  AdminEmail:
+    Type: String
+    Default: "calvin@wrightideas.biz"
+    Description: >
+      Recipient of review-gate and new-order admin emails. Must be an address
+      SES in this account can actually deliver to: while SES is in sandbox,
+      that means a verified identity — wrightideas.biz is the verified domain,
+      so an address on it works and an external mailbox silently would not.
+
 # NOTE: Runtime, Architectures and Layers are deliberately NOT set here.
 # ImagePrepFunction is a container image, and Lambda rejects all three for
 # PackageType: Image. Globals cannot be unset per-resource, so each zip function
@@ -84,6 +111,11 @@ Globals:
         FRONTEND_URL: !Ref FrontendUrl
         VIDEOS_CF_URL: !Sub 'https://${VideosCloudFrontDistribution.DomainName}'
         SES_FROM_EMAIL: !Ref SesFromEmail
+        # Global, not per-function: more than one function emails the admin
+        # (stripe_webhook on a new order, review_notify on a prep review). Set
+        # on only one of them, the others silently fall back to the hardcoded
+        # default in email_utils — which is how a stale address survives.
+        ADMIN_EMAIL: !Ref AdminEmail
         # Secrets passed as NoEcho parameters at deploy time — encrypted at rest by Lambda KMS
         STRIPE_SECRET_KEY: !Ref StripeSecretKey
         RUNWAY_API_KEY: !Ref RunwayApiKey
@@ -344,6 +376,14 @@ Resources:
                   - ses:SendEmail
                   - ses:SendRawEmail
                 Resource: '*'
+              # The review gate: review_notify auto-approves in off/notify
+              # modes and review_decision redeems the admin's approval. Task
+              # tokens are not resource-scopable, hence '*'.
+              - Effect: Allow
+                Action:
+                  - states:SendTaskSuccess
+                  - states:SendTaskFailure
+                Resource: '*'
               - Effect: Allow
                 Action:
                   - bedrock:InvokeModel
@@ -481,30 +521,32 @@ Resources:
       Architectures: [arm64]
       Role: !GetAtt LambdaExecutionRole.Arn
       Description: Orient, crop, enhance and restore one uploaded photo before Runway
-      # 3008MB is this account's ceiling — the legacy default for the Lambda
-      # "Function memory size" quota. It is NOT enough to run generative
-      # restoration, which peaks around 3.8GB (see MIN_RESTORE_MEMORY_MB in
-      # image_restore.py for the measurements). At this size the function
-      # detects that and runs deterministic processing only.
+      # 10240MB: restoration peaks around 3.9GB (see MIN_RESTORE_MEMORY_MB in
+      # image_restore.py for the measurements — the RetinaFace spike is fixed
+      # and does not shrink with input size), and this size also provides
+      # ~6 vCPU rather than ~2, which cuts restore time roughly threefold.
       #
-      # TO ENABLE RESTORATION: raise the quota to 10240 in Service Quotas
-      # (lambda / L-B99A9384), then change this to 10240 and redeploy. The
-      # memory check reads the live value, so no code change is needed — and
-      # 10240MB also buys ~6 vCPU rather than ~2, which cuts restore time
-      # roughly threefold.
+      # The account's Lambda memory cap was raised from the new-account
+      # 3008MB ceiling by an AWS Support case (NOT Service Quotas — function
+      # memory is not a self-service quota; L-B99A9384 is concurrency).
+      # If this ever deploys into an account still capped at 3008,
+      # CloudFormation rejects the value; drop it to 3008 and the memory
+      # guard in image_restore.py degrades to deterministic-only processing.
       Timeout: 900
-      MemorySize: 3008
+      MemorySize: 10240
       EphemeralStorage:
         Size: 2048
       Environment:
         Variables:
           ENABLE_RESTORE: "true"
           RESTORE_WEIGHT: !Ref RestoreWeight
+          RESTORE_WEIGHT_MIN: !Ref RestoreWeightMin
           SHARPNESS_SOFT: !Ref SharpnessSoft
           MODEL_DIR: /opt/ml/models
-          # Matched to the ~2 vCPU that 3008MB provides. Oversubscribing torch
-          # threads past the available cores makes it slower, not faster.
-          TORCH_THREADS: "2"
+          # Matched to the ~6 vCPU that 10240MB provides. Oversubscribing
+          # torch threads past the available cores makes it slower, not
+          # faster — if MemorySize changes, change this with it.
+          TORCH_THREADS: "6"
           KEEP_SOURCE_COPY: "true"
     Metadata:
       Dockerfile: functions/image_prep/Dockerfile
@@ -542,6 +584,58 @@ Resources:
           ENABLE_KEYFRAMES: "true"
           CLIP_DURATION: "5"
       # No Events — invoked directly by the state machine.
+
+  # Sends the admin the before/after review email and (in gate mode) leaves the
+  # state machine waiting on its task token. See functions/review_notify.
+  ReviewNotifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-review-notify-${Environment}'
+      CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
+      Handler: functions.review_notify.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Email the admin a prep review and gate the pipeline on approval
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          REVIEW_MODE: !Ref ReviewMode
+          # ADMIN_EMAIL comes from Globals — deliberately not repeated here.
+          REVIEW_API_BASE: !Sub 'https://${MemoriesApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}'
+      # No Events — invoked by the state machine with waitForTaskToken.
+
+  # Redeems decisions from the review email links, authorised by the per-order
+  # 128-bit review key. GET never mutates — it renders a confirmation page (and
+  # serves image redirects); the form's POST performs the change. See the
+  # Events comment below and the handler docstring.
+  ReviewDecisionFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-review-decision-${Environment}'
+      CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
+      Handler: functions.review_decision.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Apply admin review decisions and release the pipeline
+      Timeout: 30
+      MemorySize: 256
+      Events:
+        # ANY: GET renders confirmation pages and serves image redirects;
+        # POST performs the state changes. Mail scanners follow GET links,
+        # so nothing may mutate on GET.
+        ReviewDecide:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref MemoriesApi
+            Path: /review/decide
+            Method: ANY
 
   MontageBuilderFunction:
     Type: AWS::Serverless::Function
@@ -595,6 +689,7 @@ Resources:
                   - !GetAtt ImagePrepFunction.Arn
                   - !GetAtt VideoGeneratorFunction.Arn
                   - !GetAtt MontageBuilderFunction.Arn
+                  - !GetAtt ReviewNotifyFunction.Arn
 
   # Orchestrates one order end to end.
   #
@@ -612,9 +707,11 @@ Resources:
       Role: !GetAtt StateMachineRole.Arn
       Type: STANDARD
       Definition:
-        Comment: Prepare photos, generate clips, build the montage
+        Comment: Prepare photos, review-gate, generate clips, build the montage
         StartAt: PrepareFiles
-        TimeoutSeconds: 7200
+        # Must exceed the ReviewGate window (43200s) plus generation time, or
+        # a slow approval kills the whole execution at exactly the wrong time.
+        TimeoutSeconds: 57600
         States:
 
           PrepareFiles:
@@ -656,6 +753,45 @@ Resources:
                     status: FAILED
                   End: true
             ResultPath: $.prepared
+            Next: ReviewGate
+
+          # Human-in-the-loop before any Runway spend. The Lambda emails the
+          # admin a before/after review; in gate mode the execution parks here
+          # on a task token until the admin approves (or the window below
+          # expires and the Catch releases it). In off/notify modes the Lambda
+          # redeems the token itself and this state is a fast pass-through.
+          #
+          # ResultPath: null keeps $.prepared flowing to GenerateClips intact.
+          # TimeoutSeconds is the review window: 12 hours, leaving slack inside
+          # the 24h delivery promise. The machine-level TimeoutSeconds at the
+          # top of this definition is sized to cover this window plus
+          # generation time — change them together.
+          ReviewGate:
+            Type: Task
+            Resource: arn:aws:states:::lambda:invoke.waitForTaskToken
+            Parameters:
+              FunctionName: !GetAtt ReviewNotifyFunction.Arn
+              Payload:
+                order_id.$: $.order_id
+                task_token.$: $$.Task.Token
+            TimeoutSeconds: 43200
+            ResultPath: null
+            Retry:
+              - ErrorEquals: [Lambda.TooManyRequestsException, Lambda.ServiceException]
+                IntervalSeconds: 5
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              # Review window expired: proceed with the frames as prepared.
+              # A missed email must never break the delivery promise.
+              - ErrorEquals: [States.Timeout]
+                ResultPath: $.review_timeout
+                Next: GenerateClips
+              # Any other failure in the notify Lambda also must not block
+              # the order — degrade to no-review rather than no-video.
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.review_error
+                Next: GenerateClips
             Next: GenerateClips
 
           GenerateClips:

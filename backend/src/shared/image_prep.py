@@ -28,7 +28,7 @@ from __future__ import annotations
 import io
 import logging
 import os
-from dataclasses import dataclass, asdict, replace
+from dataclasses import dataclass, asdict, field, replace
 from typing import Optional
 
 import numpy as np
@@ -108,6 +108,51 @@ UNSHARP_THRESHOLD = 3
 PAD_BLUR_RADIUS = 40
 PAD_DARKEN = 0.45
 
+# ── Upload guardrail thresholds ──────────────────────────────────────────────
+# These drive advisory `warnings` on the assessment — they never block an
+# order. Surfaced at upload time (help the customer retake the photo) and in
+# the admin review email (flag files worth a closer look).
+
+# Glare: a photo of a glossy print or a photo taken through glass has hard
+# specular patches — near-white pixels with almost no texture inside them.
+# Measured on the ERODED interior of the blown mask: the patch boundary has
+# high gradients by definition, and including it inverts the test (a hard
+# specular blob reads "textured", a flat white wall reads "flat").
+#
+# BOTH AREA BOUNDS ARE POST-EROSION FRACTIONS, not raw blown-pixel counts.
+# _erode takes ~2px off every side of every patch, so a patch measures
+# smaller here than it looks: a ~1% raw specular blob lands near 0.7% and
+# does not fire. That is accepted looseness — many small highlights (a print
+# under a lamp gives exactly that) can each erode below the bound and be
+# missed. This is an advisory flag whose only cost of a miss is that nobody
+# is prompted to rephotograph, so it is tuned to not cry wolf. Do NOT lower
+# GLARE_AREA_WARN to "catch" those: the raw threshold it looks like is not
+# the threshold it is, and dropping it re-admits the boundary-dominated
+# false positives the erosion exists to remove.
+GLARE_VALUE_MIN = 250          # 0-255 luminance for "blown out"
+GLARE_FLAT_STD = 4.0           # a real bright surface still has texture
+GLARE_AREA_WARN = 0.010        # post-erosion; >1% of the frame is a glare patch
+GLARE_AREA_MAX = 0.20          # above this it's sky/overexposure, not glare
+
+# Photo-of-a-photo / photo-of-a-screen: strong periodic texture (halftone
+# printing, screen pixels, textured photo paper) shows as an isolated spectral
+# peak in the mid-frequency band. The statistic is max/99.5th-percentile within
+# a RADIAL frequency band — radial because rfft2 wraps negative frequencies to
+# the far rows, and a naive "skip the first rows" mask silently includes
+# low-frequency image content (a first version of this flagged every scan).
+# Measured on a NATIVE-RESOLUTION central crop, never a resized probe: the
+# periodic signal lives at 2-8 source pixels and resampling attenuates it —
+# a second version of this had almost no margin for exactly that reason.
+# Calibrated at native res on real 1960s-90s scans (2.5-5.2) vs synthetic
+# screen-grid and halftone overlays incl. faint ones (13.2-75.6): threshold 9.
+# Advisory only — borderline cases surface to a human, they don't block.
+MOIRE_PEAK_RATIO = 9.0
+MOIRE_BAND_LO = 0.12           # cycles/pixel at native scale
+MOIRE_BAND_HI = 0.45
+
+# A face-aware crop that cannot fit every face gets flagged for review.
+WARN_LOW_RES_SCALE = 2.5       # upscaling beyond this can't fully hide
+
 
 # ── Assessment ───────────────────────────────────────────────────────────────
 
@@ -129,9 +174,17 @@ class ImageAssessment:
     needs_face_restore: bool  # detail is soft — a face prior would recover it
     tier: int                 # 0 = none, 1 = upscale only, 2 = face restore
     reason: str
+    # Advisory quality flags for the customer / reviewer. Never block an order.
+    warnings: list = field(default_factory=list)
+    # Face boxes transformed into the framed/prescaled image handed to the
+    # restore callback — set transiently by prepare(), never persisted (see
+    # to_dict). None = detection unavailable; [] = ran and found none.
+    faces_framed: Optional[list] = None
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("faces_framed", None)   # transient plumbing, not a measurement
+        return d
 
     @property
     def preserves_tint(self) -> bool:
@@ -199,6 +252,8 @@ def assess(img: Image.Image) -> ImageAssessment:
     else:
         tier, reason = 0, "sufficient resolution and sharpness — no restoration"
 
+    warnings = _quality_warnings(img, scale_factor)
+
     return ImageAssessment(
         width=w,
         height=h,
@@ -213,7 +268,107 @@ def assess(img: Image.Image) -> ImageAssessment:
         needs_face_restore=needs_face_restore,
         tier=tier,
         reason=reason,
+        warnings=warnings,
     )
+
+
+def _quality_warnings(img: Image.Image, scale_factor: float) -> list:
+    """Advisory upload-quality flags — deterministic, cheap, never blocking.
+
+    These exist to help the customer help themselves: most of what makes a
+    memorial photo come out badly (photographing a glossy print under a lamp,
+    photographing a screen, a tiny thumbnail saved from chat) is fixable at
+    the source in thirty seconds — but only if someone says so at upload time.
+    """
+    warnings: list = []
+
+    if scale_factor > WARN_LOW_RES_SCALE:
+        warnings.append(
+            "low_resolution: the photo is much smaller than the video frame — "
+            "an original scan or full-quality export will look far better"
+        )
+
+    probe = _probe_copy(img, 512)
+    arr = np.asarray(probe.convert("L"), dtype=np.float32)
+
+    if _has_glare(arr):
+        warnings.append(
+            "possible_glare: bright reflective patches suggest a photo of a "
+            "glossy print or through glass — re-photograph flat, near a window, "
+            "with no direct light"
+        )
+
+    # The texture test reads a NATIVE-RESOLUTION central crop, not the resized
+    # probe: halftone dots and screen pixels live at 2-8 source pixels, and a
+    # thumbnail resample attenuates (or aliases) exactly those frequencies.
+    w, h = img.size
+    cw, ch = min(768, w), min(768, h)
+    crop = img.crop(((w - cw) // 2, (h - ch) // 2,
+                     (w - cw) // 2 + cw, (h - ch) // 2 + ch))
+    native = np.asarray(crop.convert("L"), dtype=np.float32)
+
+    if _has_periodic_texture(native):
+        warnings.append(
+            "possible_rephotographed_print_or_screen: strong regular texture "
+            "suggests a photo of a printed or on-screen image — scan the "
+            "original or use the original digital file if possible"
+        )
+
+    return warnings
+
+
+def _erode(mask: np.ndarray, iterations: int = 2) -> np.ndarray:
+    """3x3 binary erosion via shifts — keeps the module scipy-free."""
+    m = mask
+    for _ in range(iterations):
+        p = np.pad(m, 1, mode="constant")
+        m = (
+            p[1:-1, 1:-1] & p[:-2, 1:-1] & p[2:, 1:-1]
+            & p[1:-1, :-2] & p[1:-1, 2:]
+            & p[:-2, :-2] & p[:-2, 2:] & p[2:, :-2] & p[2:, 2:]
+        )
+    return m
+
+
+def _has_glare(grey: np.ndarray) -> bool:
+    """Specular glare: near-white patches whose INTERIOR is texture-free.
+
+    The mask is eroded before anything is measured so the patch boundary —
+    which has steep gradients no matter what the patch is — never enters the
+    statistic. An upper area bound separates glare (a patch) from a blown sky
+    or white wall (a region): both are flat inside, only one is fixable by
+    re-photographing the print.
+
+    Both area bounds are fractions of the ERODED mask — see the constants for
+    what that means for small patches, and why it is not a tuning target.
+    """
+    blown = _erode(grey >= GLARE_VALUE_MIN)
+    frac = float(blown.mean())
+    if not (GLARE_AREA_WARN <= frac <= GLARE_AREA_MAX):
+        return False
+    gy, gx = np.gradient(grey)
+    grad = np.hypot(gx, gy)
+    return float(grad[blown].std()) < GLARE_FLAT_STD
+
+
+def _has_periodic_texture(grey: np.ndarray) -> bool:
+    """Halftone dots / screen pixels / paper texture: an isolated spectral peak.
+
+    Film grain and JPEG noise are broadband and do not trip this; a printed dot
+    pattern or a screen's pixel grid concentrates energy in one or two sharp
+    peaks that tower over the rest of the band.
+    """
+    h, w = grey.shape
+    if h < 64 or w < 64:
+        return False
+    spec = np.abs(np.fft.rfft2(grey - grey.mean()))
+    fy = np.fft.fftfreq(h)[:, None]     # handles rfft2's wrapped negative rows
+    fx = np.fft.rfftfreq(w)[None, :]
+    radius = np.hypot(fy, fx)
+    band = spec[(radius > MOIRE_BAND_LO) & (radius < MOIRE_BAND_HI)]
+    if band.size < 100:
+        return False
+    return float(band.max() / (np.percentile(band, 99.5) + 1e-6)) > MOIRE_PEAK_RATIO
 
 
 def _detect_tone(img: Image.Image) -> tuple[bool, bool]:
@@ -314,22 +469,54 @@ def apply_crop_rect(img: Image.Image, rect: dict) -> Image.Image:
     return img.crop(box)
 
 
-def _centre_crop_16x9(img: Image.Image) -> Image.Image:
-    """Crop the largest centred 16:9 region.
+def _crop_offset_16x9(img: Image.Image, faces: Optional[list]) -> tuple:
+    """Choose the 16:9 crop window: (left, top, cw, ch, all_faces_fit).
 
-    Biased slightly above centre: in a photo of a person the head is above the
-    midline, so a strictly centred crop is more likely to cut the top of a head
-    than the bottom of a torso.
+    With face boxes the window slides to keep every face (plus hair/chin
+    margin) in frame; without them it falls back to the centred window with
+    the above-centre bias. Shared by the enhanced frame and the _before
+    control so both are framed IDENTICALLY — the review email compares them
+    side by side, which only means something if the framing matches.
     """
     w, h = img.size
     if w / h >= TARGET_ASPECT:
-        new_w = int(round(h * TARGET_ASPECT))
-        left = (w - new_w) // 2
-        return img.crop((left, 0, left + new_w, h))
+        cw, ch = int(round(h * TARGET_ASPECT)), h
+    else:
+        cw, ch = w, int(round(w / TARGET_ASPECT))
 
-    new_h = int(round(w / TARGET_ASPECT))
-    top = int((h - new_h) * 0.4)
-    return img.crop((0, top, w, top + new_h))
+    if not faces:
+        if w / h >= TARGET_ASPECT:
+            return (w - cw) // 2, 0, cw, ch, True
+        return 0, int((h - ch) * 0.4), cw, ch, True
+
+    xs1, ys1, xs2, ys2 = [], [], [], []
+    for x1, y1, x2, y2 in faces:
+        fw, fh = x2 - x1, y2 - y1
+        xs1.append(max(0.0, x1 - fw * FACE_MARGIN_X))
+        xs2.append(min(float(w), x2 + fw * FACE_MARGIN_X))
+        ys1.append(max(0.0, y1 - fh * FACE_MARGIN_TOP))
+        ys2.append(min(float(h), y2 + fh * FACE_MARGIN_BOTTOM))
+    ux1, uy1, ux2, uy2 = min(xs1), min(ys1), max(xs2), max(ys2)
+    cx, cy = (ux1 + ux2) / 2, (uy1 + uy2) / 2
+
+    left = int(np.clip(cx - cw / 2, 0, w - cw))
+    top = int(np.clip(cy - ch / 2, 0, h - ch))
+    fits = (ux2 - ux1) <= cw + 2 and (uy2 - uy1) <= ch + 2
+    return left, top, cw, ch, fits
+
+
+# How much margin a face needs around its detection box before a crop edge is
+# considered to have "cut" it. Above the box covers hair; below keeps the chin
+# clear of the frame edge.
+FACE_MARGIN_X = 0.30
+FACE_MARGIN_TOP = 0.60
+FACE_MARGIN_BOTTOM = 0.40
+
+
+def _centre_crop_16x9(img: Image.Image) -> Image.Image:
+    """Crop the largest centred 16:9 region (no-information fallback path)."""
+    left, top, cw, ch, _ = _crop_offset_16x9(img, None)
+    return img.crop((left, top, left + cw, top + ch))
 
 
 def _fit_with_blur_pad(img: Image.Image) -> Image.Image:
@@ -415,26 +602,78 @@ def _unsharp_percent(a: ImageAssessment) -> int:
     return int(min(pct, UNSHARP_PERCENT_MAX))
 
 
+def _transform_faces(
+    faces: Optional[list], off_x: int, off_y: int, scale: float, size: tuple
+) -> Optional[list]:
+    """Map source-coordinate face boxes into the framed/prescaled image.
+
+    Preserves the None/[] distinction (unavailable vs none found). Boxes whose
+    centre falls outside the framed region are dropped — a face cropped out of
+    frame must not influence the restore weight.
+    """
+    if faces is None:
+        return None
+    w, h = size
+    out = []
+    for x1, y1, x2, y2 in faces:
+        nx1, ny1 = (x1 - off_x) * scale, (y1 - off_y) * scale
+        nx2, ny2 = (x2 - off_x) * scale, (y2 - off_y) * scale
+        cx, cy = (nx1 + nx2) / 2, (ny1 + ny2) / 2
+        if not (0 <= cx < w and 0 <= cy < h):
+            continue
+        out.append([
+            max(0.0, nx1), max(0.0, ny1), min(float(w), nx2), min(float(h), ny2)
+        ])
+    return out
+
+
 # ── Public entry point ───────────────────────────────────────────────────────
 
 
 def _frame(
-    img: Image.Image, a: ImageAssessment, crop_rect: Optional[dict]
-) -> Image.Image:
+    img: Image.Image,
+    a: ImageAssessment,
+    crop_rect: Optional[dict],
+    faces: Optional[list] = None,
+) -> tuple[Image.Image, tuple[int, int]]:
     """Reduce the source to the region that will actually be shown.
 
     Done before restoration so the slow models never process pixels that are
     about to be discarded. On a 3000px source cropped to 16:9 that is a quarter
     of the work saved.
+
+    Returns (framed, (offset_x, offset_y)) — the offset of the framed region
+    in source coordinates, so face boxes detected on the source can be
+    transformed into the framed image for the restore stage.
+
+    `faces` (source-coordinate boxes from the single detection pass in the
+    handler) makes the automatic crop face-aware. A customer-chosen crop_rect
+    always wins — the customer framed it deliberately — and only the
+    exact-ratio touch-up runs.
     """
     if crop_rect:
         # The UI constrains the handle to 16:9, but clamping in apply_crop_rect
         # can shave it slightly — re-crop to exact ratio so the final resize
-        # never distorts.
-        return _centre_crop_16x9(apply_crop_rect(img, crop_rect))
+        # never distorts. Offsets compose: user rect, then ratio touch-up.
+        w, h = img.size
+        rected = apply_crop_rect(img, crop_rect)
+        rx = int(max(0.0, min(1.0, float(crop_rect.get("x", 0.0)))) * w)
+        ry = int(max(0.0, min(1.0, float(crop_rect.get("y", 0.0)))) * h)
+        if rected.size == img.size:      # degenerate rect was ignored
+            rx = ry = 0
+        left, top, cw, ch, _ = _crop_offset_16x9(rected, None)
+        return rected.crop((left, top, left + cw, top + ch)), (rx + left, ry + top)
     if a.frame_mode == "crop":
-        return _centre_crop_16x9(img)
-    return img
+        left, top, cw, ch, fits = _crop_offset_16x9(img, faces)
+        if faces and not fits:
+            warn = (
+                "faces_exceed_frame: the people in this photo span more "
+                "than a 16:9 crop can hold — check the framing"
+            )
+            if warn not in a.warnings:   # _frame runs twice (frame + control)
+                a.warnings.append(warn)
+        return img.crop((left, top, left + cw, top + ch)), (left, top)
+    return img, (0, 0)
 
 
 def _prescale_for_restore(framed: Image.Image, a: ImageAssessment) -> Image.Image:
@@ -507,6 +746,8 @@ def prepare(
     tone_strength: float = 0.6,
     sharpen: bool = True,
     restore=None,
+    detect_faces=None,
+    faces: Optional[list] = None,
 ) -> tuple[Image.Image, dict]:
     """Produce the 1280x720 RGB frame that gets submitted to Runway.
 
@@ -523,18 +764,40 @@ def prepare(
     injected rather than imported so this module stays torch-free and testable;
     the container function passes `image_restore.restore`, and anything else
     passes nothing and gets the deterministic path.
+
+    `faces` is an optional precomputed detection result in SOURCE coordinates
+    (None = detection unavailable, [] = no faces, else boxes). The prep
+    handler detects once and passes the same boxes to the enhanced frame, the
+    _before control frame, and (transformed) the restore stage — one detector
+    pass per photo, and every decision made from the same boxes.
+
+    `detect_faces` is an optional callable (img) -> faces with the same
+    contract, used only when `faces` is not supplied. Without either, framing
+    and restoration behave exactly as before this feature existed.
     """
     a = assessment or assess(img)
     meta: dict = {"restored": False}
 
-    framed = _frame(img, a, crop_rect)
+    if faces is None and detect_faces is not None:
+        try:
+            faces = detect_faces(img)
+        except Exception:
+            logger.warning("Face detection callback failed — centre crop", exc_info=True)
+            faces = None
+
+    framed, (off_x, off_y) = _frame(img, a, crop_rect, faces if not crop_rect else None)
 
     if restore is not None:
         # Shrink to the output size first — see _prescale_for_restore. The
         # reassessment must happen after, so needs_upscale reflects the pixels
         # restoration actually receives.
+        pre_w = framed.size[0]
         framed = _prescale_for_restore(framed, a)
-        framed, meta = restore(framed, _reassess_for_region(a, framed))
+        scale = framed.size[0] / pre_w
+        a_region = _reassess_for_region(a, framed)
+        a_region = replace(a_region, faces_framed=_transform_faces(
+            faces, off_x, off_y, scale, framed.size))
+        framed, meta = restore(framed, a_region)
 
     toned = _tone_correct(framed, a, tone_strength)
 
@@ -570,9 +833,14 @@ def prepare_bytes(
     data: bytes,
     crop_rect: Optional[dict] = None,
     restore=None,
+    detect_faces=None,
+    faces: Optional[list] = None,
 ) -> tuple[bytes, ImageAssessment, dict]:
     """Convenience wrapper: raw upload bytes in, Runway-ready JPEG bytes out."""
     img = load_and_orient(data)
     a = assess(img)
-    out, meta = prepare(img, a, crop_rect=crop_rect, restore=restore)
+    out, meta = prepare(
+        img, a, crop_rect=crop_rect, restore=restore,
+        detect_faces=detect_faces, faces=faces,
+    )
     return to_jpeg_bytes(out), a, meta

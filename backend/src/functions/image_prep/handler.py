@@ -86,14 +86,24 @@ def _prepare_file(order_id: str, file_id: str) -> dict:
     raw = s3.get_object(Bucket=UPLOADS_BUCKET, Key=f.s3_key)["Body"].read()
     logger.info("Preparing %s (%s bytes) crop=%s", f.s3_key, len(raw), bool(f.crop_rect))
 
+    # Detect faces ONCE on the oriented source; the same boxes drive the
+    # face-aware framing of the enhanced frame, the identically-framed _before
+    # control, and (transformed) the adaptive restore weight. RetinaFace is
+    # the most expensive model in this function — one pass, one truth.
+    img = image_prep.load_and_orient(raw)
+    assessment = image_prep.assess(img)
+    faces = image_restore.detect_faces(img)   # None = detector unavailable
+
     # `restore` is injected rather than imported inside image_prep, so the
     # deterministic module stays torch-free. If the torch stack failed to load,
     # image_restore.restore returns the image untouched and prep still succeeds.
-    jpeg, assessment, restore_meta = image_prep.prepare_bytes(
-        raw,
+    out, restore_meta = image_prep.prepare(
+        img, assessment,
         crop_rect=f.crop_rect or None,
         restore=image_restore.restore,
+        faces=faces,
     )
+    jpeg = image_prep.to_jpeg_bytes(out)
 
     prepared_key = f"prepared/{order_id}/{file_id}.jpg"
     s3.put_object(
@@ -104,7 +114,9 @@ def _prepare_file(order_id: str, file_id: str) -> dict:
     )
 
     if KEEP_SOURCE_COPY:
-        _store_source_reference(raw, order_id, file_id)
+        _store_source_reference(
+            img, assessment, faces, f.crop_rect or None, order_id, file_id
+        )
 
     update_file_status(
         order_id, file_id,
@@ -127,17 +139,23 @@ def _prepare_file(order_id: str, file_id: str) -> dict:
     }
 
 
-def _store_source_reference(raw: bytes, order_id: str, file_id: str) -> None:
+def _store_source_reference(
+    img, assessment, faces, crop_rect, order_id: str, file_id: str
+) -> None:
     """Write the framed-but-unenhanced version alongside the prepared frame.
 
     Not the raw upload — that is already in S3 untouched. This is the same
     framing and resize with restoration and tone correction switched off, which
     makes it a like-for-like control for judging whether enhancement helped.
+    The SAME face boxes are passed so both frames get the identical face-aware
+    crop — a control framed differently from the frame it controls for is no
+    control at all.
     """
     try:
-        img = image_prep.load_and_orient(raw)
-        a = image_prep.assess(img)
-        before, _ = image_prep.prepare(img, a, tone_strength=0.0, sharpen=False)
+        before, _ = image_prep.prepare(
+            img, assessment, crop_rect=crop_rect,
+            tone_strength=0.0, sharpen=False, faces=faces,
+        )
         s3.put_object(
             Bucket=UPLOADS_BUCKET,
             Key=f"prepared/{order_id}/{file_id}_before.jpg",

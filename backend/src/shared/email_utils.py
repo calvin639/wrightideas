@@ -10,6 +10,16 @@ ses = boto3.client("ses", region_name="eu-west-1")
 
 FROM_EMAIL = os.environ.get("SES_FROM_EMAIL", "noreply@wrightideas.biz")
 
+# Fallback recipient for admin notifications when ADMIN_EMAIL is unset.
+#
+# On an address in the SES-verified domain, deliberately. While SES is in
+# sandbox, recipients must be verified identities, so an external mailbox
+# (a personal gmail, say) is rejected at send time — and because every admin
+# send is best-effort, that failure is a log line, not a visible error.
+# ADMIN_EMAIL is set globally in template.yaml; this only covers local runs
+# and any future function that forgets it.
+ADMIN_EMAIL_FALLBACK = "calvin@wrightideas.biz"
+
 
 def send_order_confirmation(order) -> None:
     """Send confirmation email when order is placed and paid."""
@@ -25,7 +35,7 @@ def send_order_confirmation(order) -> None:
         <p><strong>Total paid:</strong> €{order.total_amount_cents/100:.2f}</p>
       </div>
       <p>Your memorial video will be ready within <strong>24 hours</strong>. We'll send you an email as soon as it's complete with a link to the tribute page.</p>
-      <p>If you have any questions, reply to this email or contact us at <a href="mailto:calvin.wright639@gmail.com">calvin.wright639@gmail.com</a>.</p>
+      <p>If you have any questions, reply to this email or contact us at <a href="mailto:calvin@wrightideas.biz">calvin@wrightideas.biz</a>.</p>
       <br>
       <p style="color: #9c7c5e; font-style: italic;">— The Memories in Stone team</p>
     </body></html>
@@ -58,7 +68,7 @@ def send_video_ready(order) -> None:
 
 def send_admin_new_order(order) -> None:
     """Notify admin of a new paid order."""
-    admin_email = os.environ.get("ADMIN_EMAIL", "calvin.wright639@gmail.com")
+    admin_email = os.environ.get("ADMIN_EMAIL", ADMIN_EMAIL_FALLBACK)
     subject = f"[NEW ORDER] {order.loved_one_name} — €{order.total_amount_cents/100:.2f}"
     body_html = f"""
     <html><body style="font-family: monospace; padding: 20px;">
@@ -79,7 +89,101 @@ Created:      {order.created_at}
     _send(admin_email, subject, body_html)
 
 
-def _send(to_email: str, subject: str, body_html: str) -> None:
+def send_admin_review_request(order, items, decide_base: str) -> bool:
+    """Ask the admin to sign off on prepared frames before Runway spend.
+
+    Returns True only if SES accepted the message — the gate-mode caller
+    auto-approves the order when this fails, so a broken email can never
+    park an order for the full review window.
+
+    `items`: [{file_id, filename, before_url, after_url, warnings,
+    restore_meta}] from the review_notify function. `decide_base` is the
+    decision endpoint with order and review key baked in; empty string means
+    notify-only mode (no buttons, no gate).
+    """
+    admin_email = os.environ.get("ADMIN_EMAIL", ADMIN_EMAIL_FALLBACK)
+    gate = bool(decide_base)
+    subject = (
+        f"[{'REVIEW NEEDED' if gate else 'PREP REPORT'}] "
+        f"{order.loved_one_name} — {len(items)} photo(s) prepared"
+    )
+
+    rows = []
+    for it in items:
+        warn_html = ""
+        if it["warnings"]:
+            warn_lines = "".join(f"<li>{w}</li>" for w in it["warnings"])
+            warn_html = (
+                f'<ul style="color:#a33; margin:6px 0 0 0; padding-left:18px;'
+                f' font-size:13px;">{warn_lines}</ul>'
+            )
+        rm = it.get("restore_meta") or {}
+        detail = (
+            f"weight {rm.get('weight', '—')} · faces {rm.get('face_count', '—')} "
+            f"· median {rm.get('median_face_px', '—')}px · tier {rm.get('tier', '—')}"
+        )
+        before_img = (
+            f'<td style="width:50%; padding:4px;"><img src="{it["before_url"]}" '
+            f'style="width:100%; border:1px solid #ccc;"><br>'
+            f'<small>before (unenhanced)</small></td>'
+            if it["before_url"] else
+            '<td style="width:50%; padding:4px; color:#999;"><small>no control frame</small></td>'
+        )
+        buttons = ""
+        if gate:
+            buttons = (
+                f'<a href="{decide_base}&action=use_before&file={it["file_id"]}" '
+                f'style="font-size:13px; margin-right:12px;">use unenhanced instead</a>'
+                f'<a href="{decide_base}&action=use_enhanced&file={it["file_id"]}" '
+                f'style="font-size:13px;">use enhanced</a>'
+            )
+        rows.append(f"""
+        <div style="margin:24px 0; padding-bottom:16px; border-bottom:1px solid #ddd;">
+          <p style="margin:0 0 4px 0;"><strong>{it['filename'] or it['file_id']}</strong><br>
+             <small style="color:#666;">{detail}</small></p>
+          {warn_html}
+          <table style="width:100%; border-collapse:collapse;"><tr>
+            {before_img}
+            <td style="width:50%; padding:4px;"><img src="{it['after_url']}"
+                style="width:100%; border:1px solid #ccc;"><br>
+                <small>after (submitting this)</small></td>
+          </tr></table>
+          {buttons}
+        </div>""")
+
+    approve_html = ""
+    if gate:
+        approve_html = f"""
+      <div style="text-align:center; margin:30px 0;">
+        <a href="{decide_base}&action=approve_all"
+           style="background:#2d5a2d; color:white; padding:14px 28px;
+                  text-decoration:none; border-radius:6px; font-size:16px;">
+          Approve — send to video generation →
+        </a>
+      </div>
+      <p style="color:#888; font-size:13px;">The order waits for this approval.
+      If no decision is made before the review window closes, it proceeds
+      automatically with the frames shown above.</p>"""
+
+    body_html = f"""
+    <html><body style="font-family: Georgia, serif; color: #2c2c2c; max-width: 640px; margin: 0 auto; padding: 20px;">
+      <h2 style="color: #4a3f35;">Photo review — {order.loved_one_name}</h2>
+      <p>Order <strong>{order.order_id[:8].upper()}</strong> ·
+         {order.customer_name} · {len(items)} photo(s) prepared</p>
+      {''.join(rows)}
+      {approve_html}
+    </body></html>
+    """
+    return _send(admin_email, subject, body_html)
+
+
+def _send(to_email: str, subject: str, body_html: str) -> bool:
+    """Send one email. Returns True on success, False on failure.
+
+    Never raises — email failures must not break the pipeline — but callers
+    that DEPEND on delivery (the review gate: an unsent review email means a
+    12-hour stall for nothing) must check the return value and degrade.
+    """
     try:
         ses.send_email(
             Source=FROM_EMAIL,
@@ -90,6 +194,7 @@ def _send(to_email: str, subject: str, body_html: str) -> None:
             },
         )
         logger.info(f"Email sent to {to_email}: {subject}")
+        return True
     except Exception as e:
         logger.error(f"Failed to send email to {to_email}: {e}")
-        # Don't raise — email failures shouldn't break the pipeline
+        return False

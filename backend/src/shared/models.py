@@ -143,6 +143,14 @@ class Order:
     qr_svg_s3_key: str = ""
     tribute_page_url: str = ""
 
+    # Human-in-the-loop review of prepared frames (before Runway spend).
+    # review_key is the unguessable secret embedded in the admin's email links;
+    # review_task_token is the Step Functions callback token the decision
+    # endpoint redeems. review_status: "" | PENDING | APPROVED | AUTO_APPROVED.
+    review_key: str = ""
+    review_task_token: str = ""
+    review_status: str = ""
+
     # Meta
     created_at: str = field(default_factory=now_iso)
     updated_at: str = field(default_factory=now_iso)
