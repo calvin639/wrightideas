@@ -81,12 +81,14 @@ export STRIPE_SANDBOX_KEY="sk_test_..."         # dev
 export STRIPE_SECRET_KEY="sk_live_..."          # prod
 export STRIPE_WEBHOOK_SECRET="whsec_..."        # set after first deploy
 
-# Runway ML
+# fal.ai — the video generation provider
+export FAL_AI_API_KEY="..."        # or FAL_KEY; deploy.sh accepts either
+
+# Runway — DEPRECATED, no longer used for generation. Safe to omit.
 export RUNWAY_AI_KEY="..."
-export RUNWAY_WEBHOOK_URL="https://YOUR_API/dev/webhooks/runway"  # set after first deploy
 ```
 
-Deploy will abort if `STRIPE_*` or `RUNWAY_AI_KEY` are missing. The webhook secret and Runway URL are allowed to be placeholders on the very first deploy — you fill them in afterwards.
+Deploy will abort if `STRIPE_*`, `RUNWAY_AI_KEY` or `FAL_AI_API_KEY` are missing. The webhook secret and Runway URL are allowed to be placeholders on the very first deploy — you fill them in afterwards.
 
 ### First-time setup (per environment)
 
@@ -119,7 +121,7 @@ aws ssm put-parameter \
   --value "whsec_YOUR_SECRET" \
   --type SecureString --overwrite --region eu-west-1
 
-# 6. Record the API domain in SSM (used when submitting jobs to Runway)
+# 6. Record the API domain in SSM (legacy — was used for Runway callbacks)
 aws ssm put-parameter \
   --name "/memories/dev/api-domain" \
   --value "YOUR_API_ID.execute-api.eu-west-1.amazonaws.com" \

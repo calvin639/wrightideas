@@ -1,4 +1,15 @@
 """
+DEPRECATED — Runway is no longer the video generation provider.
+
+Runway's API route to seedance blocks photographs of real people
+(INPUT_PREPROCESSING.SAFETY.THIRD_PARTY) and its first-party models reject
+the first/last keyframe array, so it could give us faces or identity pinning
+but never both. Generation moved to fal.ai — see functions/video_generator.
+
+This endpoint was already observe-only before the migration (Step Functions
+polls for completion); it is now entirely inert. Retained so the route does
+not 404, and deliberately NOT deleted yet.
+
 POST /webhooks/runway  —  OBSERVE ONLY
 
 Runway calls this when a task finishes. It deliberately writes nothing.

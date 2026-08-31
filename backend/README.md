@@ -10,11 +10,11 @@ Customer → API Gateway (HTTP API)
             ├── GET  /orders/{id}           → GetOrderFunction
             ├── POST /orders/{id}/checkout  → CreateCheckoutFunction
             ├── POST /webhooks/stripe       → StripeWebhookFunction
-            └── POST /webhooks/runway       → RunwayWebhookFunction
+            └── POST /webhooks/runway       → RunwayWebhookFunction (DEPRECATED, inert)
 
 Payment confirmed → SQS (VideoGenerationQueue) → VideoGeneratorFunction
-                    → Runway ML API (per file)
-                    → Runway calls /webhooks/runway when each clip ready
+                    → fal.ai queue API (per file)
+                    → the same Lambda polls fal and stores each clip
 
 All clips done → SQS (MontageQueue) → MontageBuilderFunction
                  → FFmpeg montage → S3
@@ -48,7 +48,8 @@ pip install aws-sam-cli
 | Service | URL | What you need |
 |---|---|---|
 | **Stripe** | https://dashboard.stripe.com | Secret key + Webhook secret |
-| **Runway ML** | https://app.runwayml.com | API key |
+| **fal.ai** | https://fal.ai/dashboard/keys | API key (`FAL_AI_API_KEY`) |
+| ~~Runway ML~~ | ~~https://app.runwayml.com~~ | DEPRECATED — blocks real faces, see CLAUDE.md |
 | **AWS SES** | AWS Console → SES | Verify your sender email |
 
 ### 2. Verify your SES sender email
@@ -102,7 +103,7 @@ aws ssm put-parameter \
   --region eu-west-1
 ```
 
-### 6. Set the API domain in SSM (for Runway webhooks)
+### 6. Set the API domain in SSM (legacy — was for Runway webhooks)
 
 ```bash
 aws ssm put-parameter \
@@ -256,7 +257,9 @@ Stripe webhook endpoint (configure in Stripe dashboard).
 ---
 
 ### `POST /webhooks/runway`
-Runway ML callback (set as `callbackUrl` in Runway submissions).
+**DEPRECATED and inert.** Runway is no longer the generation provider, and even
+before the migration this endpoint was observe-only — Step Functions polls for
+completion. Retained so the route does not 404 if anything still calls it.
 
 ---
 
@@ -293,7 +296,7 @@ backend/
         ├── get_order/       GET /orders/{id}
         ├── create_checkout/ POST /orders/{id}/checkout
         ├── stripe_webhook/  POST /webhooks/stripe
-        ├── runway_webhook/  POST /webhooks/runway
-        ├── video_generator/ SQS → Runway ML submission
+        ├── runway_webhook/  DEPRECATED — inert
+        ├── video_generator/ Step Functions → fal.ai submit/poll
         └── montage_builder/ SQS → FFmpeg montage + delivery
 ```

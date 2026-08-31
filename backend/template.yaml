@@ -29,7 +29,14 @@ Parameters:
   RunwayApiKey:
     Type: String
     NoEcho: true
-    Description: Runway ML API key
+    Default: "placeholder-runway-deprecated"
+    Description: >
+      DEPRECATED — Runway is no longer the video provider. Its API route to
+      seedance blocks photographs of real people
+      (INPUT_PREPROCESSING.SAFETY.THIRD_PARTY) and its first-party models
+      reject the first/last keyframe array, so it can give us faces or identity
+      pinning but never both. Retained so the stack and the RunwayWebhook route
+      still deploy; nothing reads it. Video generation uses FalApiKey.
 
   StripeWebhookSecret:
     Type: String
@@ -40,12 +47,36 @@ Parameters:
   RunwayWebhookUrl:
     Type: String
     Default: https://placeholder/webhooks/runway
-    Description: Full URL for Runway ML callbacks (update after first deploy)
+    Description: >
+      DEPRECATED — callbacks for a provider we no longer use. The endpoint was
+      already observe-only (Step Functions polls instead); it is now inert.
+
+  FalApiKey:
+    Type: String
+    NoEcho: true
+    Description: >
+      fal.ai API key — the video generation provider. Runway's API route to
+      seedance blocks photographs of real people
+      (INPUT_PREPROCESSING.SAFETY.THIRD_PARTY) and its own models reject the
+      first/last keyframe array, so fal is the only route giving us both faces
+      and identity pinning.
+
+  VideoModel:
+    Type: String
+    Default: bytedance/seedance-2.0/image-to-video
+    Description: >
+      fal model slug for image-to-video. seedance is the default because it is
+      the only tested model that both accepts an end keyframe AND still moves
+      when the end frame is identical to the start. Kling (v3 Pro and O3 Pro)
+      accepts the end frame and freezes; fal-ai/vidu/q3/image-to-video works
+      and is the fallback. Changing this to a model outside KEYFRAME_MODELS
+      (see video_generator) silently drops identity pinning.
 
   RunwayModel:
     Type: String
     Default: seedance2
     Description: >
+      DEPRECATED — see VideoModel, which is the live setting. Historical note:
       Runway ML model for image-to-video generation. seedance2 is the default
       because it is the model documented to accept promptImage as a first/last
       keyframe array, which is what pins subject identity across the clip.
@@ -121,6 +152,8 @@ Globals:
         RUNWAY_API_KEY: !Ref RunwayApiKey
         STRIPE_WEBHOOK_SECRET: !Ref StripeWebhookSecret
         RUNWAY_WEBHOOK_URL: !Ref RunwayWebhookUrl
+        FAL_KEY: !Ref FalApiKey
+        FAL_MODEL: !Ref VideoModel
         RUNWAY_MODEL: !Ref RunwayModel
         MUSIC_KEY_PREFIX: music/
   Api:
@@ -637,6 +670,24 @@ Resources:
             Path: /review/decide
             Method: ANY
 
+  # Admin-only alert when the pipeline stops. Deliberately does NOT email the
+  # customer — most failures are fixable before they would ever notice.
+  FailureNotifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub 'memories-failure-notify-${Environment}'
+      CodeUri: src/
+      Runtime: python3.12
+      Architectures: [x86_64]
+      Layers:
+        - !Ref DependenciesLayer
+      Handler: functions.failure_notify.handler.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Description: Email the admin a diagnosis when an order fails
+      Timeout: 60
+      MemorySize: 512
+      # No Events — invoked by the state machine's Catch.
+
   MontageBuilderFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -689,6 +740,7 @@ Resources:
                   - !GetAtt ImagePrepFunction.Arn
                   - !GetAtt VideoGeneratorFunction.Arn
                   - !GetAtt MontageBuilderFunction.Arn
+                  - !GetAtt FailureNotifyFunction.Arn
                   - !GetAtt ReviewNotifyFunction.Arn
 
   # Orchestrates one order end to end.
@@ -720,7 +772,7 @@ Resources:
             # Bounded because each prep invocation takes ~6 vCPUs. Higher
             # concurrency just queues at the account level.
             MaxConcurrency: 4
-            ToleratedFailurePercentage: 60
+            ToleratedFailurePercentage: 20
             ItemSelector:
               order_id.$: $.order_id
               file_id.$: $$.Map.Item.Value.file_id
@@ -798,7 +850,7 @@ Resources:
             Type: Map
             ItemsPath: $.prepared
             MaxConcurrency: 4
-            ToleratedFailurePercentage: 60
+            ToleratedFailurePercentage: 20
             ItemSelector:
               order_id.$: $.order_id
               file.$: $$.Map.Item.Value
@@ -912,7 +964,36 @@ Resources:
                 IntervalSeconds: 10
                 MaxAttempts: 2
                 BackoffRate: 2
+            # Montage is where a failed order surfaces: too few usable clips
+            # raises here, as does anything wrong with FFmpeg or delivery.
+            # Alert the admin with the cause rather than dying silently.
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.error
+                Next: NotifyFailure
             End: true
+
+          # Terminal failure path. Emails the admin only — never the customer.
+          NotifyFailure:
+            Type: Task
+            Resource: !GetAtt FailureNotifyFunction.Arn
+            Parameters:
+              order_id.$: $.order_id
+              stage: BuildMontage
+              error.$: $.error
+            Retry:
+              - ErrorEquals: [States.ALL]
+                IntervalSeconds: 5
+                MaxAttempts: 2
+                BackoffRate: 2
+            # Fail the execution after alerting, so /workflows and
+            # check_pipeline.sh both show the order as genuinely failed.
+            Next: PipelineFailed
+
+          PipelineFailed:
+            Type: Fail
+            Error: PipelineFailed
+            Cause: An order failed; the admin has been alerted. See the failed state above.
 
 # ── OUTPUTS ────────────────────────────────────────────────────────────────────
 

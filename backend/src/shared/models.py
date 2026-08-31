@@ -147,6 +147,9 @@ class Order:
     # review_key is the unguessable secret embedded in the admin's email links;
     # review_task_token is the Step Functions callback token the decision
     # endpoint redeems. review_status: "" | PENDING | APPROVED | AUTO_APPROVED.
+    # Per-order model override for internal A/B testing; empty = env default.
+    video_model: str = ""
+
     review_key: str = ""
     review_task_token: str = ""
     review_status: str = ""
@@ -207,7 +210,17 @@ class OrderFile:
     assessment: dict = field(default_factory=dict)   # ImageAssessment.to_dict()
     restore_meta: dict = field(default_factory=dict) # what restoration ran, if any
 
-    # Runway ML
+    # Video generation (fal.ai queue API).
+    # The status/response URLs are persisted rather than rebuilt: fal's queue
+    # path drops the endpoint sub-path, so a reconstructed URL is wrong.
+    motion_prompt: str = ""      # Bedrock-generated, reused verbatim on retry
+    gen_request_id: str = ""
+    gen_status_url: str = ""
+    gen_response_url: str = ""
+    gen_model: str = ""          # which model actually produced this clip
+
+    # Legacy Runway fields — kept so records written before the fal migration
+    # still deserialize. Nothing writes these any more.
     runway_task_id: str = ""
     runway_prompt: str = ""
 

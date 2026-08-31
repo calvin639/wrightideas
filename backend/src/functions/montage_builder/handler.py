@@ -41,6 +41,11 @@ VIDEOS_CF_URL = os.environ.get("VIDEOS_CF_URL", "")
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "https://memories.wrightideas.co")
 MUSIC_KEY_PREFIX = os.environ.get("MUSIC_KEY_PREFIX", "music/")
 
+# Percentage of an order's files that must have produced usable content before
+# a montage is worth delivering. A tribute missing most of its photos is worse
+# than a delayed one — below this we fail loudly so the admin alert fires.
+MIN_SUCCESS_PCT = float(os.environ.get("MONTAGE_MIN_SUCCESS_PCT", "80"))
+
 s3 = boto3.client("s3")
 
 
@@ -80,8 +85,28 @@ def _build_montage(order_id: str) -> None:
         key=lambda f: f.sort_order,
     )
 
-    if not usable:
-        raise ValueError(f"No usable clips for order {order_id}")
+    # Completion threshold. This is the REAL gate: the Map states'
+    # ToleratedFailurePercentage never fires, because every failing iteration is
+    # caught and converted to a Pass, so the Map always reports success. Without
+    # the check below a 1-of-5 order would ship as a "finished" tribute.
+    expected = [f for f in files if f.media_kind != MediaKind.IMAGE or f.status != FileStatus.SKIPPED]
+    total = len(expected) or len(files)
+    pct = (len(usable) / total * 100) if total else 0
+    if pct < MIN_SUCCESS_PCT:
+        failed = [
+            f"{f.original_filename or f.file_id}: {f.error_message or f.status}"
+            for f in files if f not in usable
+        ]
+        raise ValueError(
+            f"Only {len(usable)}/{total} files usable ({pct:.0f}%), "
+            f"below the {MIN_SUCCESS_PCT:.0f}% threshold for order {order_id}. "
+            f"Failures — {'; '.join(failed) or 'none recorded'}"
+        )
+    if len(usable) < total:
+        logger.warning(
+            "Order %s building with %s/%s files (%.0f%%) — %s dropped",
+            order_id, len(usable), total, pct, total - len(usable),
+        )
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)

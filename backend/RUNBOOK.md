@@ -1,11 +1,11 @@
 # Running the Memories in Stone pipeline end to end
 
 How to put real photos through the whole system — order, payment, image prep,
-Runway generation, montage, delivery email — and how to tell what happened.
+clip generation on fal.ai, montage, delivery email — and how to tell what happened.
 
 Read `CLAUDE.md` first for what the project is. This file is only about running it.
 
-> **This costs real money.** Every photo becomes one Runway clip on your live
+> **This costs real money.** Every photo becomes one fal.ai clip on your live
 > API key. Keep test batches to 3–5 photos.
 
 ---
@@ -24,7 +24,8 @@ These environment variables must be set (the deploy script sources `~/.bashrc`):
 
 | Variable | Used for |
 |---|---|
-| `RUNWAY_AI_KEY` | Runway API |
+| `FAL_AI_API_KEY` | fal.ai API — the video generation provider (`FAL_KEY` also accepted) |
+| `RUNWAY_AI_KEY` | DEPRECATED — retained so the stack deploys; nothing reads it |
 | `STRIPE_SANDBOX_KEY` *or* `STRIPE_SECRET_KEY` | Stripe checkout |
 | `STRIPE_WH_DEV` | Stripe webhook signature verification |
 
@@ -55,13 +56,19 @@ Useful flags:
 
 ```bash
 --music none|beautiful|emotion|nature    # background track
---model seedance2                        # override the Runway model
+--model seedance2                        # legacy Runway flag; see VIDEO_MODEL below
 TEST_PHOTOS_DIR=/path/to/photos          # use a different folder
 ```
 
-Leave `--model` alone unless you are deliberately A/B testing. **seedance2 is
-the only model that accepts the first/last keyframe array**, which is what stops
-the subject drifting across the clip; any other model silently loses that.
+**Provider: fal.ai**, model `bytedance/seedance-2.0/image-to-video`, set via the
+`VideoModel` template parameter (override at deploy with `VIDEO_MODEL=...`).
+
+Seedance is the default because it is the only tested model that both accepts an
+end keyframe AND still animates when the end frame is identical to the start.
+Kling v3 Pro and O3 Pro accept the end frame and freeze solid regardless of
+prompt (measured: max drift 1.06/255 over 5s). `fal-ai/vidu/q3/image-to-video`
+works and is the fallback. Anything outside `KEYFRAME_MODELS` in
+`video_generator` silently loses identity pinning.
 
 ---
 
@@ -84,7 +91,7 @@ https://eu-west-1.console.aws.amazon.com/states/home?region=eu-west-1#/statemach
 
 Executions are named `order-<order_id>`.
 
-Expect **5–15 minutes** for a 3–5 photo order. Runway is the slow part.
+Expect **5–15 minutes** for a 3–5 photo order. Clip generation is the slow part.
 
 ---
 
@@ -106,7 +113,7 @@ BuildMontage      → COMPLETE         s3://…-videos/tributes/<order>/memorial
 Two emails should arrive: order confirmation on payment, and video ready on
 completion.
 
-Videos the customer uploads are **not** sent to Runway. They go straight to the
+Videos the customer uploads are **not** sent to fal. They go straight to the
 montage, trimmed to 5 seconds from the chosen start point, with audio muted.
 Their file status goes to `SKIPPED`, which is expected and not an error.
 
@@ -127,12 +134,16 @@ aws logs tail /aws/lambda/memories-montage-builder-dev --region eu-west-1 --foll
 |---|---|
 | No execution exists | Payment never completed, or the Stripe webhook failed. Check `memories-stripe-webhook-dev` logs. |
 | `restoration needs 4096MB` | Expected until the Lambda memory quota increase lands. Photos still get deterministic processing. See §6. |
-| Runway 400 mentioning `promptImage` | The model does not support keyframes. Check `RunwayModel` is `seedance2`. There is deliberately no fallback. |
+| fal error mentioning `end_image_url` | The model does not accept an end keyframe. Check `VideoModel` is in `KEYFRAME_MODELS` — removing it drops identity pinning. |
+| `ImageDownloadFailure` / "Failed to download the file" | The presigned S3 URL expired before fal fetched it. fal downloads server-side and may queue first, so `S3_PRESIGN_EXPIRY` must outlive the queue wait. Re-sign, never reuse. |
+| Clips generate but are **frozen** | The prompt described a one-way journey. The same frame is pinned first+last, so the prompt must resolve back to rest — see RULE 0 in `prompt_generator.SYSTEM_PROMPT`. |
+| `Output audio has sensitive content` | Seedance defaults `generate_audio` on and screens the audio it invents. We force it off; if this appears, that flag regressed. |
 | A file is `FAILED`, order still completes | By design — up to 60% of files may fail and the montage still runs with the rest. |
-| Order stuck in `PROCESSING` | Look at the execution. The Wait/Poll loop retries Runway; a genuinely stuck task shows there. |
+| Order stuck in `PROCESSING` | Look at the execution. The Wait/Poll loop polls fal; a genuinely stuck request shows there. |
 
-The Runway webhook endpoint is **observe-only** and writes nothing. If a clip
-went missing, the answer is in the execution history, not that function's logs.
+The `/webhooks/runway` endpoint is **deprecated and inert** — Runway is no longer
+the provider, and even before that it only observed. If a clip went missing, the
+answer is in the Step Functions execution history.
 
 ---
 
@@ -186,7 +197,7 @@ aws cloudformation describe-stacks --stack-name memories-in-stone-dev \
 
 ## 8. Verifying without spending money
 
-To exercise image prep alone — no Stripe, no Runway:
+To exercise image prep alone — no Stripe, no clip generation:
 
 ```bash
 # 1. Create an order (returns order_id + presigned upload URL)

@@ -177,6 +177,63 @@ def send_admin_review_request(order, items, decide_base: str) -> bool:
     return _send(admin_email, subject, body_html)
 
 
+def send_admin_failure_alert(order, stage: str, cause: str, files: list) -> bool:
+    """Alert the admin that an order failed. ADMIN ONLY — never the customer.
+
+    A failure is frequently fixable without the customer ever knowing (credits,
+    an expired URL, a transient provider error), and a "something went wrong"
+    email to someone who has just paid for a memorial video causes alarm that
+    the fix would have made unnecessary. So this goes to the admin with enough
+    detail to act on, and the customer hears nothing until there is something
+    real to tell them.
+
+    `files` is the list of OrderFile records, so per-file errors are included.
+    """
+    admin_email = os.environ.get("ADMIN_EMAIL", ADMIN_EMAIL_FALLBACK)
+    subject = f"[FAILED] {order.loved_one_name} — order {order.order_id[:8].upper()} stopped at {stage}"
+
+    rows = []
+    for f in files:
+        state = f.status or "?"
+        colour = "#a33" if state == "FAILED" else "#2c2c2c"
+        detail = (f.error_message or "")[:300] or "—"
+        rows.append(
+            f'<tr>'
+            f'<td style="padding:4px 8px; border-bottom:1px solid #eee;">{f.original_filename or f.file_id}</td>'
+            f'<td style="padding:4px 8px; border-bottom:1px solid #eee; color:{colour};"><strong>{state}</strong></td>'
+            f'<td style="padding:4px 8px; border-bottom:1px solid #eee; font-size:12px;">{detail}</td>'
+            f'</tr>'
+        )
+
+    body_html = f"""
+    <html><body style="font-family: -apple-system, Helvetica, sans-serif; color:#2c2c2c; max-width:760px; margin:0 auto; padding:20px;">
+      <h2 style="color:#a33;">Order failed — {order.loved_one_name}</h2>
+      <p style="font-size:15px;">Stopped at: <strong>{stage}</strong></p>
+      <div style="background:#fff5f5; border-left:4px solid #a33; padding:12px; margin:16px 0;">
+        <pre style="margin:0; white-space:pre-wrap; font-size:13px;">{cause}</pre>
+      </div>
+      <table style="border-collapse:collapse; width:100%; font-size:14px;">
+        <tr style="text-align:left; background:#f5f5f5;">
+          <th style="padding:6px 8px;">File</th><th style="padding:6px 8px;">Status</th><th style="padding:6px 8px;">Error</th>
+        </tr>
+        {''.join(rows)}
+      </table>
+      <h3 style="margin-top:24px; font-size:15px;">Order</h3>
+      <pre style="font-size:13px; background:#f9f9f9; padding:12px;">
+Order ID:  {order.order_id}
+Customer:  {order.customer_name} &lt;{order.customer_email}&gt;
+Status:    {order.status}
+Review:    {getattr(order, 'review_status', '') or '—'}
+Created:   {order.created_at}
+      </pre>
+      <p style="color:#666; font-size:13px;">The customer has <strong>not</strong> been notified.
+      Check the Step Functions execution <code>order-{order.order_id}</code> in eu-west-1,
+      then see backend/RUNBOOK.md &sect;5.</p>
+    </body></html>
+    """
+    return _send(admin_email, subject, body_html)
+
+
 def _send(to_email: str, subject: str, body_html: str) -> bool:
     """Send one email. Returns True on success, False on failure.
 

@@ -27,6 +27,15 @@ if [ -z "$RUNWAY_AI_KEY" ]; then
   exit 1
 fi
 
+# fal.ai is the video generation provider. Accept either name — fal's own
+# convention is FAL_KEY, the shell profile here defines FAL_AI_API_KEY.
+FAL_KEY_VALUE="${FAL_KEY:-$FAL_AI_API_KEY}"
+if [ -z "$FAL_KEY_VALUE" ]; then
+  echo "❌ Missing FAL_KEY / FAL_AI_API_KEY in environment"
+  echo "   Video generation runs on fal.ai — see backend/RUNBOOK.md"
+  exit 1
+fi
+
 # Use whichever Stripe key var is set
 STRIPE_KEY="${STRIPE_SECRET_KEY:-$STRIPE_SANDBOX_KEY}"
 
@@ -72,6 +81,10 @@ fi
 DEFAULT_MODEL="seedance2"
 MODEL="${RUNWAY_MODEL:-$DEFAULT_MODEL}"
 
+# fal model slug. seedance is the only tested model that accepts an end
+# keyframe AND still animates when start and end are identical — Kling freezes.
+VIDEO_MODEL="${VIDEO_MODEL:-bytedance/seedance-2.0/image-to-video}"
+
 # ── ECR (for the image_prep container function) ──────────────────────────────
 # ImagePrepFunction ships as a container image because it carries torch for
 # Real-ESRGAN and GFPGAN. SAM needs a repository to push to, and an
@@ -115,6 +128,8 @@ echo "   Runway key:   ${RUNWAY_AI_KEY:0:10}..."
 echo "   Webhook:      ${WEBHOOK_SECRET:0:15}..."
 echo "   Runway URL:   $RUNWAY_URL"
 echo "   Runway model: $MODEL"
+echo "   fal key:      ${FAL_KEY_VALUE:0:10}..."
+echo "   fal model:    $VIDEO_MODEL"
 echo ""
 
 # NOTE: --parameter-overrides on the CLI replaces all samconfig.toml overrides,
@@ -128,6 +143,8 @@ OVERRIDES=(
   "StripeWebhookSecret=$WEBHOOK_SECRET"
   "RunwayWebhookUrl=$RUNWAY_URL"
   "RunwayModel=$MODEL"
+  "FalApiKey=$FAL_KEY_VALUE"
+  "VideoModel=$VIDEO_MODEL"
 )
 
 # Build before deploying. `sam deploy` reads .aws-sam/build/template.yaml, not

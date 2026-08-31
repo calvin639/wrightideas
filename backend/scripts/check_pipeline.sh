@@ -143,9 +143,10 @@ FILES_JSON=$(aws dynamodb query \
   --expression-attribute-values "{\":pk\":{\"S\":\"ORDER#$ORDER_ID\"},\":f\":{\"S\":\"FILE#\"}}" \
   --output json 2>/dev/null)
 
-echo "$FILES_JSON" | python3 - <<'PY'
-import sys, json
-data = json.load(sys.stdin)
+FILES_JSON="$FILES_JSON" python3 - <<'PY'
+import os, sys, json
+# NOT sys.stdin: the heredoc below IS stdin, so a piped payload never arrives.
+data = json.loads(os.environ.get("FILES_JSON") or "{}")
 items = data.get("Items", [])
 if not items:
     print("      (no FILE# records — nothing was uploaded)")
@@ -160,12 +161,32 @@ print(f"      total files: {len(items)}")
 for s, c in sorted(counts.items()):
     print(f"        {s:<11} {c}")
 
-# Detail any FAILED files (likely Runway error messages)
+# Detail any FAILED files (provider error messages)
 failed = [it for it in items if it.get("status", {}).get("S") == "FAILED"]
 for it in failed[:5]:
     fid = it.get("file_id", {}).get("S", "?")
     err = it.get("error_message", {}).get("S", "(no error_message)")
     print(f"      FAILED  {fid}: {err[:120]}")
+
+# The motion prompt each clip was generated from. Written by Bedrock at submit
+# time, so it exists only after the review gate is approved — and nothing else
+# surfaces it, which makes a bad clip hard to explain after the fact.
+import textwrap
+prompted = [it for it in items
+            if it.get("motion_prompt", {}).get("S")
+            or it.get("runway_prompt", {}).get("S")]
+if prompted:
+    print("\n      motion prompts:")
+    for it in sorted(prompted, key=lambda x: float(x.get("sort_order", {}).get("N", 0))):
+        name = it.get("original_filename", {}).get("S") or it.get("file_id", {}).get("S", "?")[:8]
+        pr = (it.get("motion_prompt", {}).get("S")
+              or it.get("runway_prompt", {}).get("S", ""))
+        model = it.get("gen_model", {}).get("S", "")
+        print(f"        {name}" + (f"   [{model}]" if model else ""))
+        for line in textwrap.wrap(pr, 84):
+            print(f"          {line}")
+else:
+    print("\n      motion prompts: none yet (generated at submit, after review approval)")
 PY
 
 # ── 5. S3 outputs ─────────────────────────────────────────────────────────────

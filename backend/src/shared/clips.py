@@ -22,13 +22,13 @@ DOWNLOAD_TIMEOUT = 180
 s3 = boto3.client("s3")
 
 
-def store_clip(runway_url: str, order_id: str, file_id: str) -> str:
-    """Download a finished Runway clip into our own S3 and return its key.
+def store_clip(video_url: str, order_id: str, file_id: str) -> str:
+    """Download a finished clip into our own S3 and return its key.
 
-    Runway's output URLs expire, so the clip has to be copied before the montage
+    Provider output URLs expire, so the clip has to be copied before the montage
     stage runs — which may be minutes later if other clips are still generating.
     """
-    resp = requests.get(runway_url, timeout=DOWNLOAD_TIMEOUT)
+    resp = requests.get(video_url, timeout=DOWNLOAD_TIMEOUT)
     resp.raise_for_status()
 
     s3_key = f"clips/{order_id}/{file_id}.mp4"
