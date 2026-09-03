@@ -87,6 +87,15 @@ RUN mkdir -p ${MODEL_DIR} \
       ln -sf ${MODEL_DIR}/$w.pth ${LAMBDA_TASK_ROOT}/gfpgan/weights/$w.pth; \
     done
 
+# The segmentation model for montage cut-outs. Same reasoning as the weights
+# above: rembg otherwise downloads it from a GitHub release on first use, inside
+# a Lambda whose only writable directory is /tmp and whose cold start should not
+# depend on github.com being up. U2NET_HOME is where rembg looks.
+ENV U2NET_HOME=/opt/ml/rembg
+RUN mkdir -p ${U2NET_HOME} \
+ && curl -fsSL -o ${U2NET_HOME}/isnet-general-use.onnx \
+      https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx
+
 # torch spawns one thread per core by default and then thrashes on Lambda's
 # constrained scheduler. Pinned at runtime in the handler too; set here so any
 # import-time work is also bounded.

@@ -742,6 +742,17 @@ Resources:
                   - !GetAtt MontageBuilderFunction.Arn
                   - !GetAtt FailureNotifyFunction.Arn
                   - !GetAtt ReviewNotifyFunction.Arn
+        # The pipeline writes the customer-visible status itself, with the SDK
+        # integration rather than a Lambda: the states that advance the order
+        # are the states that know it advanced, and a Lambda round trip to set
+        # one attribute is cost and latency for nothing.
+        - PolicyName: WriteOrderStatus
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: dynamodb:UpdateItem
+                Resource: !GetAtt OrdersTable.Arn
 
   # Orchestrates one order end to end.
   #
@@ -760,11 +771,51 @@ Resources:
       Type: STANDARD
       Definition:
         Comment: Prepare photos, review-gate, generate clips, build the montage
-        StartAt: PrepareFiles
-        # Must exceed the ReviewGate window (43200s) plus generation time, or
-        # a slow approval kills the whole execution at exactly the wrong time.
-        TimeoutSeconds: 57600
+        StartAt: MarkPreparing
+        # Must exceed the ReviewGate window (43200s = 12h) plus the worst-case
+        # generation phase, or a slow approval kills the execution at exactly
+        # the wrong time. Generation is now bounded: MaxPolls (40) x 30s = 20
+        # minutes per clip, four at a time, so a 40-photo order is ~3.5h worst
+        # case. 18h leaves real headroom over 12h + 3.5h.
+        TimeoutSeconds: 64800
         States:
+
+          # ── Customer-visible status ──────────────────────────────────────
+          # Written at every stage boundary. Without these the tracking page
+          # sits on one number from payment to delivery — including the 12-hour
+          # review park — and then jumps straight to finished.
+          MarkPreparing:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:dynamodb:updateItem
+            Parameters:
+              TableName: !Ref OrdersTable
+              Key:
+                PK:
+                  S.$: States.Format('ORDER#{}', $.order_id)
+                SK:
+                  S: METADATA
+              UpdateExpression: 'SET #st = :s, GSI1PK = :g, updated_at = :t'
+              ExpressionAttributeNames:
+                '#st': status
+              ExpressionAttributeValues:
+                ':s':
+                  S: PREPARING
+                ':g':
+                  S: 'STATUS#PREPARING'
+                ':t':
+                  S.$: $$.State.EnteredTime
+            ResultPath: null
+            # A status write must never be able to fail an order.
+            Retry:
+              - ErrorEquals: [States.ALL]
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: null
+                Next: PrepareFiles
+            Next: PrepareFiles
 
           PrepareFiles:
             Type: Map
@@ -805,6 +856,42 @@ Resources:
                     status: FAILED
                   End: true
             ResultPath: $.prepared
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.error
+                Next: PrepStageFailed
+            Next: MarkAwaitingReview
+
+          MarkAwaitingReview:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:dynamodb:updateItem
+            Parameters:
+              TableName: !Ref OrdersTable
+              Key:
+                PK:
+                  S.$: States.Format('ORDER#{}', $.order_id)
+                SK:
+                  S: METADATA
+              UpdateExpression: 'SET #st = :s, GSI1PK = :g, updated_at = :t'
+              ExpressionAttributeNames:
+                '#st': status
+              ExpressionAttributeValues:
+                ':s':
+                  S: AWAITING_REVIEW
+                ':g':
+                  S: 'STATUS#AWAITING_REVIEW'
+                ':t':
+                  S.$: $$.State.EnteredTime
+            ResultPath: null
+            Retry:
+              - ErrorEquals: [States.ALL]
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: null
+                Next: ReviewGate
             Next: ReviewGate
 
           # Human-in-the-loop before any Runway spend. The Lambda emails the
@@ -838,11 +925,43 @@ Resources:
               # A missed email must never break the delivery promise.
               - ErrorEquals: [States.Timeout]
                 ResultPath: $.review_timeout
-                Next: GenerateClips
+                Next: MarkProcessing
               # Any other failure in the notify Lambda also must not block
               # the order — degrade to no-review rather than no-video.
               - ErrorEquals: [States.ALL]
                 ResultPath: $.review_error
+                Next: MarkProcessing
+            Next: MarkProcessing
+
+          MarkProcessing:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:dynamodb:updateItem
+            Parameters:
+              TableName: !Ref OrdersTable
+              Key:
+                PK:
+                  S.$: States.Format('ORDER#{}', $.order_id)
+                SK:
+                  S: METADATA
+              UpdateExpression: 'SET #st = :s, GSI1PK = :g, updated_at = :t'
+              ExpressionAttributeNames:
+                '#st': status
+              ExpressionAttributeValues:
+                ':s':
+                  S: PROCESSING
+                ':g':
+                  S: 'STATUS#PROCESSING'
+                ':t':
+                  S.$: $$.State.EnteredTime
+            ResultPath: null
+            Retry:
+              - ErrorEquals: [States.ALL]
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: null
                 Next: GenerateClips
             Next: GenerateClips
 
@@ -854,6 +973,11 @@ Resources:
             ItemSelector:
               order_id.$: $.order_id
               file.$: $$.Map.Item.Value
+              # Seed for the poll budget below. Without a counter the poll loop
+              # is unbounded: one clip stuck in the provider's queue holds a
+              # concurrency slot and eats the entire execution budget, and the
+              # order dies of machine timeout hours later with nobody told.
+              polls: 0
             ItemProcessor:
               ProcessorConfig:
                 Mode: INLINE
@@ -935,8 +1059,43 @@ Resources:
                   Choices:
                     - Variable: $.poll.state
                       StringEquals: RUNNING
-                      Next: WaitForClip
+                      Next: CountPoll
                   Default: GenerationSettled
+
+                CountPoll:
+                  Type: Pass
+                  Parameters:
+                    polls.$: States.MathAdd($.polls, 1)
+                  ResultPath: $.polls_wrapper
+                  Next: PollBudget
+
+                # 40 polls x 30s = 20 minutes per clip. Generation normally
+                # takes one to three. A clip still RUNNING after twenty is not
+                # slow, it is stuck, and waiting longer only spends the review
+                # window's remaining slack.
+                PollBudget:
+                  Type: Choice
+                  Choices:
+                    - Variable: $.polls_wrapper.polls
+                      NumericGreaterThanEquals: 40
+                      Next: GenerationTimedOut
+                  Default: RecountPoll
+
+                RecountPoll:
+                  Type: Pass
+                  Parameters:
+                    order_id.$: $.order_id
+                    file.$: $.file
+                    submit.$: $.submit
+                    polls.$: $.polls_wrapper.polls
+                  Next: WaitForClip
+
+                GenerationTimedOut:
+                  Type: Pass
+                  Parameters:
+                    file_id.$: $.file.file_id
+                    state: TIMED_OUT
+                  End: true
 
                 GenerationSettled:
                   Type: Pass
@@ -952,6 +1111,42 @@ Resources:
                     state: FAILED
                   End: true
             ResultPath: $.generated
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: $.error
+                Next: GenerateStageFailed
+            Next: MarkMontage
+
+          MarkMontage:
+            Type: Task
+            Resource: arn:aws:states:::aws-sdk:dynamodb:updateItem
+            Parameters:
+              TableName: !Ref OrdersTable
+              Key:
+                PK:
+                  S.$: States.Format('ORDER#{}', $.order_id)
+                SK:
+                  S: METADATA
+              UpdateExpression: 'SET #st = :s, GSI1PK = :g, updated_at = :t'
+              ExpressionAttributeNames:
+                '#st': status
+              ExpressionAttributeValues:
+                ':s':
+                  S: MONTAGE
+                ':g':
+                  S: 'STATUS#MONTAGE'
+                ':t':
+                  S.$: $$.State.EnteredTime
+            ResultPath: null
+            Retry:
+              - ErrorEquals: [States.ALL]
+                IntervalSeconds: 2
+                MaxAttempts: 3
+                BackoffRate: 2
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: null
+                Next: BuildMontage
             Next: BuildMontage
 
           BuildMontage:
@@ -970,8 +1165,31 @@ Resources:
             Catch:
               - ErrorEquals: [States.ALL]
                 ResultPath: $.error
-                Next: NotifyFailure
+                Next: MontageStageFailed
             End: true
+
+          # ── Failure routing ───────────────────────────────────────────────
+          # Each stage names itself before alerting, so the admin email says
+          # where it broke instead of always claiming BuildMontage. Previously
+          # only BuildMontage had a Catch at all, so a failure anywhere earlier
+          # ended the execution with no alert and the order stuck mid-status.
+          PrepStageFailed:
+            Type: Pass
+            Result: PrepareFiles
+            ResultPath: $.stage
+            Next: NotifyFailure
+
+          GenerateStageFailed:
+            Type: Pass
+            Result: GenerateClips
+            ResultPath: $.stage
+            Next: NotifyFailure
+
+          MontageStageFailed:
+            Type: Pass
+            Result: BuildMontage
+            ResultPath: $.stage
+            Next: NotifyFailure
 
           # Terminal failure path. Emails the admin only — never the customer.
           NotifyFailure:
@@ -979,13 +1197,20 @@ Resources:
             Resource: !GetAtt FailureNotifyFunction.Arn
             Parameters:
               order_id.$: $.order_id
-              stage: BuildMontage
+              stage.$: $.stage
               error.$: $.error
             Retry:
               - ErrorEquals: [States.ALL]
                 IntervalSeconds: 5
                 MaxAttempts: 2
                 BackoffRate: 2
+            # If even the alert Lambda cannot run, still reach the Fail state:
+            # without this the execution ends on a Lambda error and the order
+            # never registers as failed anywhere.
+            Catch:
+              - ErrorEquals: [States.ALL]
+                ResultPath: null
+                Next: PipelineFailed
             # Fail the execution after alerting, so /workflows and
             # check_pipeline.sh both show the order as genuinely failed.
             Next: PipelineFailed
@@ -994,6 +1219,129 @@ Resources:
             Type: Fail
             Error: PipelineFailed
             Cause: An order failed; the admin has been alerted. See the failed state above.
+
+
+  # ── ALERTING ──────────────────────────────────────────────────────────────
+  # Before this there was no alarm on anything. A failed or timed-out execution
+  # left the order stuck in DynamoDB and the only way to find out was for the
+  # customer to ask where their video was.
+
+  PipelineAlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub 'memories-pipeline-alerts-${Environment}'
+      DisplayName: Memories pipeline alerts
+
+  # SNS email subscriptions must be confirmed by clicking the link AWS sends on
+  # first deploy. Until that is done the alarms fire into nothing.
+  PipelineAlertSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PipelineAlertTopic
+      Protocol: email
+      Endpoint: !Ref AdminEmail
+
+  # An execution that fails has already emailed the admin from NotifyFailure.
+  # This is the backstop for the failures that never reach that state.
+  PipelineFailedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'memories-pipeline-failed-${Environment}'
+      AlarmDescription: An order's pipeline execution failed.
+      Namespace: AWS/States
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref MemoriesPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref PipelineAlertTopic]
+
+  # The important one. A timeout means the order is stuck mid-flight with no
+  # Catch, no email and no terminal status — the exact silent failure the
+  # bounded poll loop is meant to prevent. If this ever fires, the bound is
+  # wrong or something upstream is much slower than it should be.
+  PipelineTimedOutAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'memories-pipeline-timed-out-${Environment}'
+      AlarmDescription: An order exceeded the pipeline timeout and was abandoned mid-flight.
+      Namespace: AWS/States
+      MetricName: ExecutionsTimedOut
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref MemoriesPipeline
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref PipelineAlertTopic]
+
+  # Executions run for hours by design (a 12-hour review window), so a duration
+  # alarm has to sit above that or it fires on every healthy order. This is
+  # sized at 17h — past any legitimate run, short of the 18h machine timeout,
+  # so it warns while there is still time to intervene.
+  PipelineDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'memories-pipeline-slow-${Environment}'
+      AlarmDescription: An order has been running long enough to be close to timing out.
+      Namespace: AWS/States
+      MetricName: ExecutionTime
+      Dimensions:
+        - Name: StateMachineArn
+          Value: !Ref MemoriesPipeline
+      ExtendedStatistic: p99
+      Period: 3600
+      EvaluationPeriods: 1
+      Threshold: 61200000    # 17h in milliseconds
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref PipelineAlertTopic]
+
+  # Stripe talks to this endpoint and nothing else does. An error here is a
+  # payment that may have been taken without an order moving.
+  StripeWebhookErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'memories-stripe-webhook-errors-${Environment}'
+      AlarmDescription: The Stripe webhook is erroring — payments may not be registering.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref StripeWebhookFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref PipelineAlertTopic]
+
+  MontageBuilderErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'memories-montage-errors-${Environment}'
+      AlarmDescription: The montage builder is failing.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MontageBuilderFunction
+      Statistic: Sum
+      Period: 900
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions: [!Ref PipelineAlertTopic]
 
 # ── OUTPUTS ────────────────────────────────────────────────────────────────────
 

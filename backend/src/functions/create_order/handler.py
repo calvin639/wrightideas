@@ -46,6 +46,7 @@ from botocore.exceptions import ClientError
 from shared.models import (
     Order, OrderFile, media_kind_for, MediaKind,
     IMAGE_CONTENT_TYPES, VIDEO_CONTENT_TYPES, MAX_VIDEO_SECONDS,
+    INTRO_STYLES, DEFAULT_INTRO_STYLE,
 )
 from shared.db import create_order, create_order_file
 from shared.pricing import calculate_price_cents, STONE_STYLES
@@ -131,6 +132,13 @@ def lambda_handler(event, context):
     if music_choice not in VALID_MUSIC:
         return error(f"music_choice must be one of: {', '.join(sorted(VALID_MUSIC))}")
 
+    # Intro style is optional: an order placed before the choice existed, or by
+    # a client that does not send it, gets the original opening.
+    VALID_INTRO = set(INTRO_STYLES)
+    intro_style = (body.get("intro_style") or DEFAULT_INTRO_STYLE).strip().lower()
+    if intro_style not in VALID_INTRO:
+        return error(f"intro_style must be one of: {', '.join(sorted(VALID_INTRO))}")
+
     # ── Create order ──────────────────────────────────────────────────────────
     order = Order(
         customer_name=body["customer_name"].strip(),
@@ -144,6 +152,7 @@ def lambda_handler(event, context):
         stone_quantity=quantity,
         total_amount_cents=calculate_price_cents(quantity),
         music_choice=music_choice,
+        intro_style=intro_style,
         # Optional per-order model override for internal testing. Passed through
         # as-is (no allowlist) so new Runway models can be tested without a code
         # change; an invalid string just makes Runway reject the submission.

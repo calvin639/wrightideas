@@ -52,13 +52,35 @@ def new_id() -> str:
 # ── ORDER STATUS ──────────────────────────────────────────────────────────────
 
 class OrderStatus(str, Enum):
+    """Where an order is. Every value here is written by something — the
+    customer's tracking page reads these, so a stage that is never written is a
+    stage where the page appears frozen.
+
+    The pipeline advances them in this order:
+        PAID → PREPARING → AWAITING_REVIEW → PROCESSING → MONTAGE → COMPLETE
+    """
     PENDING_UPLOAD   = "PENDING_UPLOAD"    # Order created, awaiting file uploads
     PENDING_PAYMENT  = "PENDING_PAYMENT"   # Files uploaded, awaiting Stripe payment
     PAID             = "PAID"              # Payment confirmed, processing queued
+    PREPARING        = "PREPARING"         # Restoring and framing the photos
+    AWAITING_REVIEW  = "AWAITING_REVIEW"   # Parked for the admin's before/after check
     PROCESSING       = "PROCESSING"        # AI video generation in progress
     MONTAGE          = "MONTAGE"           # All clips done, building final video
     COMPLETE         = "COMPLETE"          # Final video ready, email sent
     FAILED           = "FAILED"            # Something went wrong
+
+
+# Statuses an order may be in when Stripe tells us the money arrived. Anything
+# further along means this is a webhook replay, not a new payment.
+AWAITING_PAYMENT_STATUSES = (
+    OrderStatus.PENDING_UPLOAD.value,
+    OrderStatus.PENDING_PAYMENT.value,
+)
+
+# Stripe's `payment_status` values that mean the money is actually ours.
+# `unpaid` appears on checkout.session.completed for delayed-settlement methods
+# and must NOT start the pipeline — the funds may still fail days later.
+SETTLED_PAYMENT_STATUSES = ("paid", "no_payment_required")
 
 
 # ── FILE STATUS ───────────────────────────────────────────────────────────────
@@ -88,6 +110,15 @@ class MediaKind(str, Enum):
 # Customer video clips are capped to match the length of a generated clip, so
 # one long home video cannot dominate the montage.
 MAX_VIDEO_SECONDS = 5.0
+
+# ── INTRO STYLES ──────────────────────────────────────────────────────────────
+# How the montage opens. Both end on the same wall of prints, which is why one
+# closing rewind serves both. Rendered in montage_builder/sequence.py; the names
+# live here so the order API and the renderer cannot drift apart.
+WALL_INTRO = "wall"            # subjects step out of the dark, settle into their photos
+FLIPBOOK_INTRO = "flipbook"    # the album riffles past, then deals itself out
+INTRO_STYLES = (WALL_INTRO, FLIPBOOK_INTRO)
+DEFAULT_INTRO_STYLE = WALL_INTRO
 
 IMAGE_CONTENT_TYPES = {
     "image/jpeg", "image/jpg", "image/png", "image/webp", "image/heic", "image/heif",
@@ -124,6 +155,12 @@ class Order:
     stone_quantity: int = 1
     total_amount_cents: int = 0
     music_choice: str = ""       # beautiful | emotion | nature | none
+
+    # How the montage opens. Both styles end on the same wall of prints, so the
+    # closing rewind is shared between them. See montage_builder/sequence.py.
+    #   wall      subjects step out of the dark and settle back into their photos
+    #   flipbook  the album riffles past the lens, then deals itself onto the wall
+    intro_style: str = "wall"    # wall | flipbook
 
     # Generation override (optional — for internal A/B testing of Runway models).
     # Empty string means "use the RUNWAY_MODEL Lambda env default". Not exposed

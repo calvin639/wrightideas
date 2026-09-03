@@ -767,6 +767,32 @@
                   </div>
                 </div>
 
+                <hr style="border:none;border-top:1px solid var(--border);margin:1.5rem 0;"/>
+                <p class="form-label" style="margin-bottom:0.3rem;font-size:0.9rem;color:var(--text-mid);">How the video opens</p>
+                <p style="font-size:0.82rem;color:var(--text-light);margin-bottom:0.85rem;">Both openings gather the photographs into one picture before the memories begin. <span style="color:#b94040">*</span></p>
+                <div class="music-options" id="introOptions">
+                  <div class="music-option">
+                    <input type="radio" name="intro_style" id="intro_wall" value="wall" checked/>
+                    <label for="intro_wall">
+                      <span class="music-option-icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="9" height="7" rx="1"/><rect x="13" y="4" width="9" height="7" rx="1"/><rect x="2" y="13" width="9" height="7" rx="1"/><rect x="13" y="13" width="9" height="7" rx="1"/></svg>
+                      </span>
+                      <span class="music-option-name">Gathering</span>
+                      <span class="music-option-desc">Each person steps forward, then settles into their photograph</span>
+                    </label>
+                  </div>
+                  <div class="music-option">
+                    <input type="radio" name="intro_style" id="intro_flipbook" value="flipbook"/>
+                    <label for="intro_flipbook">
+                      <span class="music-option-icon" aria-hidden="true">
+                        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="6" width="14" height="11" rx="1"/><path d="M7 4h13a1 1 0 0 1 1 1v12"/><path d="M17 8l4-2"/></svg>
+                      </span>
+                      <span class="music-option-name">Flipbook</span>
+                      <span class="music-option-desc">The whole album flicks past, then spreads out</span>
+                    </label>
+                  </div>
+                </div>
+
                 <div class="wizard-actions">
                   <button type="submit" class="btn-primary">
                     Next — Add Photos
@@ -984,6 +1010,11 @@
         showStatus('Please choose a music option for the memorial video.', 'error'); return;
       }
 
+      const introRadio = form.querySelector('input[name="intro_style"]:checked');
+      if (!introRadio) {
+        showStatus('Please choose how the memorial video opens.', 'error'); return;
+      }
+
       wizardState.orderDetails = {
         customer_name: customerName,
         customer_email: customerEmail,
@@ -995,6 +1026,7 @@
         stone_style: form.stone_style.value,
         stone_quantity: parseInt(form.stone_quantity.value, 10) || 1,
         music_choice: musicRadio.value,
+        intro_style: introRadio.value,
       };
 
       goToStep(2);
@@ -1244,6 +1276,7 @@
       const d = wizardState.orderDetails;
       const styleLabels = { black_slate: 'Black Slate', grey_granite: 'Grey Granite', river_stone: 'River Stone' };
       const musicLabels = { beautiful: 'Beautiful', emotion: 'Emotional', nature: 'Nature', none: 'No music' };
+      const introLabels = { wall: 'Gathering', flipbook: 'Flipbook' };
       const rows = [
         ['For', d.loved_one_name],
         ['Your name', d.customer_name],
@@ -1254,6 +1287,7 @@
         ['Stone style', styleLabels[d.stone_style] || d.stone_style],
         ['Quantity', d.stone_quantity],
         ['Music', musicLabels[d.music_choice] || d.music_choice],
+        ['Opening', introLabels[d.intro_style] || d.intro_style],
         ['Photos uploaded', wizardState.selectedFiles.length],
       ].filter(Boolean);
 

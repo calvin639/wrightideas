@@ -7,7 +7,12 @@ import boto3
 from boto3.dynamodb.conditions import Key
 from decimal import Decimal
 from typing import Optional, List
-from shared.models import Order, OrderFile, OrderStatus, FileStatus, now_iso
+from botocore.exceptions import ClientError
+
+from shared.models import (
+    Order, OrderFile, OrderStatus, FileStatus, now_iso,
+    AWAITING_PAYMENT_STATUSES,
+)
 
 _dynamodb = None
 
@@ -75,6 +80,44 @@ def update_order_status(order_id: str, status: str, **extra_fields) -> None:
         ExpressionAttributeNames=attr_names,
         ExpressionAttributeValues=expr_attrs,
     )
+
+
+def mark_order_paid(order_id: str, stripe_payment_intent: str = "") -> bool:
+    """Move an order to PAID, exactly once.
+
+    Returns True if this call performed the transition, False if the order had
+    already moved past awaiting-payment.
+
+    The condition is the whole point. Stripe redelivers webhooks — on its own
+    retry schedule, and again whenever an endpoint is re-pointed or a event is
+    resent by hand — and an unconditional write would rewind a COMPLETE order
+    to PAID, re-send the customer their payment confirmation, and leave the
+    tracking page claiming a finished tribute was still queued. Callers send
+    email only when this returns True.
+    """
+    try:
+        get_table().update_item(
+            Key={"PK": f"ORDER#{order_id}", "SK": "METADATA"},
+            UpdateExpression=(
+                "SET #st = :paid, updated_at = :ts, GSI1PK = :gsi1pk, "
+                "stripe_payment_intent = :pi"
+            ),
+            ConditionExpression="attribute_exists(PK) AND #st IN (:pu, :pp)",
+            ExpressionAttributeNames={"#st": "status"},
+            ExpressionAttributeValues={
+                ":paid": OrderStatus.PAID.value,
+                ":ts": now_iso(),
+                ":gsi1pk": f"STATUS#{OrderStatus.PAID.value}",
+                ":pi": stripe_payment_intent or "",
+                ":pu": AWAITING_PAYMENT_STATUSES[0],
+                ":pp": AWAITING_PAYMENT_STATUSES[1],
+            },
+        )
+        return True
+    except ClientError as e:
+        if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
+            return False
+        raise
 
 
 def get_orders_by_status(status: str) -> List[Order]:

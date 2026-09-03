@@ -52,18 +52,26 @@ STATUS_LABELS = {
     OrderStatus.PENDING_UPLOAD:  "Waiting for files to upload…",
     OrderStatus.PENDING_PAYMENT: "Awaiting payment…",
     OrderStatus.PAID:            "Payment confirmed — queuing your video…",
+    OrderStatus.PREPARING:       "Restoring and framing your photographs…",
+    OrderStatus.AWAITING_REVIEW: "Your restored photographs are being checked by hand…",
     OrderStatus.PROCESSING:      "Creating your memorial video…",
     OrderStatus.MONTAGE:         "Assembling the final tribute video…",
     OrderStatus.COMPLETE:        "Your tribute video is ready! 🎬",
     OrderStatus.FAILED:          "Something went wrong. We'll be in touch shortly.",
 }
 
+# Every stage the pipeline actually writes gets its own number. The gap between
+# PAID and PROCESSING used to swallow photo restoration and the whole review
+# window — often the longest part of an order — so the bar sat on one value for
+# most of a day and then jumped.
 STATUS_PROGRESS = {
     OrderStatus.PENDING_UPLOAD:  10,
     OrderStatus.PENDING_PAYMENT: 20,
-    OrderStatus.PAID:            30,
-    OrderStatus.PROCESSING:      60,
-    OrderStatus.MONTAGE:         85,
+    OrderStatus.PAID:            25,
+    OrderStatus.PREPARING:       35,
+    OrderStatus.AWAITING_REVIEW: 45,
+    OrderStatus.PROCESSING:      55,
+    OrderStatus.MONTAGE:         90,
     OrderStatus.COMPLETE:        100,
     OrderStatus.FAILED:          0,
 }
@@ -111,7 +119,7 @@ def lambda_handler(event, context):
     progress = STATUS_PROGRESS.get(order.status, 0)
     if order.status == OrderStatus.PROCESSING and files:
         done_count = sum(1 for f in files if f["status"] == FileStatus.DONE)
-        progress = 30 + int((done_count / len(files)) * 50)  # 30-80%
+        progress = 55 + int((done_count / len(files)) * 33)  # 55-88%, under MONTAGE
 
     return ok({
         "order_id": order.order_id,

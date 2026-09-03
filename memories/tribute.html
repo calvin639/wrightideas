@@ -143,8 +143,36 @@
       return last || null;
     }
 
+    /* ---- Escaping for anything interpolated into markup ----
+       The loved one's name is free text the customer typed at order time and
+       it is stored and served back verbatim. Dropped into an HTML attribute
+       raw, a name containing a double quote closes the attribute early and
+       whatever follows is parsed as more attributes — which is how you get a
+       script running on this page from the order form. Every value that
+       reaches innerHTML goes through here first; anywhere else on this page,
+       prefer textContent, which cannot be escaped out of at all. */
+    function esc(value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    /* ---- What stage the tribute is at ----
+       The wording comes from the API's status_label rather than a copy of the
+       stage list kept here: the pipeline gains stages from time to time, and a
+       second list in the browser is a second thing to forget to update. Falls
+       back to the generic line for anything unrecognised or missing. */
+    function stageMessage(label) {
+      return (label && String(label).trim())
+        ? label
+        : 'The memorial video is being prepared with care.';
+    }
+
     /* ---- Render the video element or a "not ready" placeholder ---- */
-    function renderVideo(videoUrl, lovedOneName) {
+    function renderVideo(videoUrl, lovedOneName, statusLabel) {
       const container = document.getElementById('videoContainer');
       if (!container) return;
 
@@ -162,11 +190,11 @@
               muted
               preload="auto"
               playsinline
-              aria-label="Memorial video for ${lovedOneName || 'your loved one'}"
+              aria-label="Memorial video for ${esc(lovedOneName || 'your loved one')}"
             >
-              <source src="${videoUrl}" type="video/mp4"/>
+              <source src="${esc(videoUrl)}" type="video/mp4"/>
               <p style="padding:2rem;text-align:center;color:var(--text-light);font-style:italic;">
-                Your browser doesn't support HTML5 video. <a href="${videoUrl}" style="color:var(--stone);">Download the memorial video</a>.
+                Your browser doesn't support HTML5 video. <a href="${esc(videoUrl)}" style="color:var(--stone);">Download the memorial video</a>.
               </p>
             </video>
             <p class="tribute-video-hint" style="margin:8px 0 0;text-align:center;font-size:0.85rem;color:var(--text-light);font-style:italic;">
@@ -182,7 +210,7 @@
                 <polygon points="10 8 16 12 10 16 10 8" fill="currentColor" opacity="0.4"/>
               </svg>
             </div>
-            <p>The memorial video is being prepared with care.</p>
+            <p>${esc(stageMessage(statusLabel))}</p>
             <small>Please check back soon — it will appear here once it's ready.</small>
           </div>`;
       }
@@ -219,7 +247,7 @@
       }
 
       // Video
-      renderVideo(order.video_url, name);
+      renderVideo(order.video_url, name, order.status_label);
 
       // Show content, hide loader
       hide('loadingState');

@@ -24,7 +24,8 @@ import os
 
 import boto3
 
-from shared import image_prep, image_restore
+from shared import image_prep
+from . import cutout, image_restore
 from shared.db import get_order_file, update_file_status
 from shared.models import FileStatus, MediaKind
 
@@ -37,6 +38,11 @@ UPLOADS_BUCKET = os.environ.get("UPLOADS_BUCKET", "")
 # enhancement decision auditable against the source. Cheap, and the only way to
 # tell whether restoration helped or hurt on a real customer photo.
 KEEP_SOURCE_COPY = os.environ.get("KEEP_SOURCE_COPY", "true").lower() == "true"
+
+# Write a subject cut-out alongside the prepared frame, for the montage's
+# opening. Off switch exists because the cut-out is decorative: if the model
+# starts costing more than it is worth, prep should keep working without it.
+CUTOUTS_ENABLED = os.environ.get("CUTOUTS_ENABLED", "1") not in ("0", "false", "False")
 
 s3 = boto3.client("s3")
 
@@ -112,6 +118,24 @@ def _prepare_file(order_id: str, file_id: str) -> dict:
         Body=jpeg,
         ContentType="image/jpeg",
     )
+
+    # Subject cut-out for the montage's opening. Best-effort by design: if the
+    # model is unavailable or the mask is unusable this writes nothing, and the
+    # intro falls back to flying the whole print in. Never fail prep over it —
+    # the customer's tribute does not depend on it.
+    if CUTOUTS_ENABLED:
+        try:
+            png = cutout.make_cutout(out, faces=faces)
+            if png:
+                s3.put_object(
+                    Bucket=UPLOADS_BUCKET,
+                    Key=f"prepared/{order_id}/{file_id}_cutout.png",
+                    Body=png,
+                    ContentType="image/png",
+                )
+                logger.info("Cut-out written for %s (%s bytes)", file_id, len(png))
+        except Exception as e:                   # noqa: BLE001
+            logger.warning("Cut-out step failed for %s: %s", file_id, e)
 
     if KEEP_SOURCE_COPY:
         _store_source_reference(
