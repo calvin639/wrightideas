@@ -23,10 +23,10 @@ The outro rewinds the montage at speed and lands back on the wall.
 from __future__ import annotations
 
 import math
+import random
 from typing import Iterator, Sequence
 
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+from PIL import Image, ImageChops, ImageDraw, ImageEnhance, ImageFilter, ImageFont
 
 W, H, FPS = 1280, 720, 24
 BG = (11, 11, 14)
@@ -65,6 +65,14 @@ def _font(size: int, bold: bool = False):
     return ImageFont.load_default()
 
 
+def _linspace(a: float, b: float, n: int) -> list:
+    """Evenly spaced values, endpoints included."""
+    if n <= 1:
+        return [a]
+    step = (b - a) / (n - 1)
+    return [a + step * i for i in range(n)]
+
+
 def _ease_out(t: float) -> float:
     return 1 - (1 - t) ** 3
 
@@ -73,16 +81,35 @@ def _ease_io(t: float) -> float:
     return 3 * t * t - 2 * t ** 3
 
 
-_yy, _xx = np.mgrid[0:H, 0:W]
-_dist = np.sqrt(((_xx - W / 2) / (W / 2)) ** 2 + ((_yy - H / 2) / (H / 2)) ** 2)
-VIGNETTE = np.clip(1.0 - 0.55 * np.clip(_dist - 0.55, 0, None) ** 1.6, 0, 1)[..., None].astype(np.float32)
+def _build_vignette() -> Image.Image:
+    """A soft radial falloff, as a greyscale mask to multiply frames by.
+
+    Computed at a sixteenth scale and resized up. The falloff is smooth by
+    construction, so the upscale is visually identical to evaluating it per
+    pixel — and it is the difference between a millisecond and a per-pixel
+    Python loop over 921,600 pixels at every cold start.
+    """
+    sw, sh = W // 16, H // 16
+    small = Image.new("L", (sw, sh))
+    px = small.load()
+    for y in range(sh):
+        dy = ((y + 0.5) / sh - 0.5) * 2
+        for x in range(sw):
+            dx = ((x + 0.5) / sw - 0.5) * 2
+            d = math.sqrt(dx * dx + dy * dy)
+            v = 1.0 - 0.55 * (max(0.0, d - 0.55) ** 1.6)
+            px[x, y] = max(0, min(255, int(round(v * 255))))
+    return small.resize((W, H), Image.BICUBIC)
+
+
+VIGNETTE = _build_vignette().convert("RGB")
 
 
 def _finish(canvas: Image.Image, dim: float = 0.0) -> Image.Image:
-    a = np.asarray(canvas.convert("RGB")).astype(np.float32) * VIGNETTE
+    img = canvas.convert("RGB")
     if dim:
-        a *= (1.0 - dim)
-    return Image.fromarray(a.clip(0, 255).astype(np.uint8))
+        img = ImageEnhance.Brightness(img).enhance(max(0.0, 1.0 - dim))
+    return ImageChops.multiply(img, VIGNETTE)
 
 
 def framed(tile: Image.Image, b: int = 10) -> Image.Image:
@@ -172,7 +199,7 @@ def build_layout(items: list, seed: int = 11) -> list:
     Positions are pushed past the frame edges so the pile bleeds off screen
     instead of floating in a box of background.
     """
-    rng = np.random.default_rng(seed)
+    rng = random.Random(seed)
     rows = _rows_for(len(items))
     tile_w = W * (0.485 if len(items) <= 10 else 0.445)
     k = 0
@@ -234,7 +261,7 @@ def _render_wall(items, name, message) -> Iterator[Image.Image]:
     title_in, title_hold = 1.5, 1.4
     # Arrivals accelerate, so a twelve-photo intro lands in about the same time
     # as a six-photo one instead of dragging.
-    stag = np.linspace(0.60, 0.30, max(1, len(items)))
+    stag = _linspace(0.60, 0.30, max(1, len(items)))
     starts, t = [], title_in + title_hold
     for s in stag:
         starts.append(t)
@@ -295,7 +322,7 @@ def _render_flipbook(items, name, message) -> Iterator[Image.Image]:
     deck = items
     cards = {it["key"]: it["card"] for it in deck}
     card_ratio = next(iter(cards.values())).width / W
-    rng = np.random.default_rng(23)
+    rng = random.Random(23)
     jit = {it["key"]: (float(rng.uniform(-2.6, 2.6)), float(rng.uniform(-26, 26)),
                        float(rng.uniform(-18, 18))) for it in deck}
 
@@ -303,9 +330,9 @@ def _render_flipbook(items, name, message) -> Iterator[Image.Image]:
     t0 = title_in + title_hold
     n = len(deck)
     if n > 4:
-        iv = np.concatenate([np.linspace(0.17, 0.075, n - 4), np.linspace(0.085, 0.16, 4)])
+        iv = _linspace(0.17, 0.075, n - 4) + _linspace(0.085, 0.16, 4)
     else:
-        iv = np.full(n, 0.16)
+        iv = [0.16] * n
     starts, t = [], t0
     for v in iv:
         starts.append(t)
