@@ -116,6 +116,19 @@ Parameters:
       review window times out and auto-approves). "notify" sends the same
       email but does not wait. "off" skips review entirely.
 
+  EnableAlerts:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: >
+      Create the SNS alert topic and CloudWatch alarms. Off by default because
+      the deploying IAM user needs SNS and CloudWatch permissions it may not
+      have — without them CloudFormation fails the whole stack and rolls back,
+      taking every unrelated change with it. Turn on once the deploy role has
+      the SNS/CloudWatch actions listed in RUNBOOK.md. With this off the
+      pipeline still runs and still emails the admin from NotifyFailure; what
+      is lost is the backstop for failures that never reach that state.
+
   AdminEmail:
     Type: String
     Default: "calvin@wrightideas.biz"
@@ -163,6 +176,9 @@ Globals:
       AllowMethods: "'GET,POST,OPTIONS'"
 
 # ─── RESOURCES ────────────────────────────────────────────────────────────────
+
+Conditions:
+  CreateAlerts: !Equals [!Ref EnableAlerts, 'true']
 
 Resources:
 
@@ -1227,6 +1243,7 @@ Resources:
   # customer to ask where their video was.
 
   PipelineAlertTopic:
+    Condition: CreateAlerts
     Type: AWS::SNS::Topic
     Properties:
       TopicName: !Sub 'memories-pipeline-alerts-${Environment}'
@@ -1235,6 +1252,7 @@ Resources:
   # SNS email subscriptions must be confirmed by clicking the link AWS sends on
   # first deploy. Until that is done the alarms fire into nothing.
   PipelineAlertSubscription:
+    Condition: CreateAlerts
     Type: AWS::SNS::Subscription
     Properties:
       TopicArn: !Ref PipelineAlertTopic
@@ -1244,6 +1262,7 @@ Resources:
   # An execution that fails has already emailed the admin from NotifyFailure.
   # This is the backstop for the failures that never reach that state.
   PipelineFailedAlarm:
+    Condition: CreateAlerts
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub 'memories-pipeline-failed-${Environment}'
@@ -1266,6 +1285,7 @@ Resources:
   # bounded poll loop is meant to prevent. If this ever fires, the bound is
   # wrong or something upstream is much slower than it should be.
   PipelineTimedOutAlarm:
+    Condition: CreateAlerts
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub 'memories-pipeline-timed-out-${Environment}'
@@ -1288,6 +1308,7 @@ Resources:
   # sized at 17h — past any legitimate run, short of the 18h machine timeout,
   # so it warns while there is still time to intervene.
   PipelineDurationAlarm:
+    Condition: CreateAlerts
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub 'memories-pipeline-slow-${Environment}'
@@ -1308,6 +1329,7 @@ Resources:
   # Stripe talks to this endpoint and nothing else does. An error here is a
   # payment that may have been taken without an order moving.
   StripeWebhookErrorAlarm:
+    Condition: CreateAlerts
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub 'memories-stripe-webhook-errors-${Environment}'
@@ -1326,6 +1348,7 @@ Resources:
       AlarmActions: [!Ref PipelineAlertTopic]
 
   MontageBuilderErrorAlarm:
+    Condition: CreateAlerts
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub 'memories-montage-errors-${Environment}'

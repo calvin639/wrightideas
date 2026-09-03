@@ -231,3 +231,79 @@ aws dynamodb update-item --table-name memories-orders-dev --region eu-west-1 \
   --expression-attribute-names '{"#s":"status"}' \
   --expression-attribute-values '{":v":{"S":"UPLOADED"}}'
 ```
+
+## Pipeline alerting
+
+Off by default (`EnableAlerts=false`). Turning it on creates an SNS topic, an
+email subscription to `AdminEmail`, and five CloudWatch alarms: failed
+executions, timed-out executions, p99 execution time over 17h, and Lambda
+errors on the Stripe webhook and the montage builder.
+
+It is opt-in because CloudFormation rolls the **entire stack** back if any one
+resource fails, so a missing SNS permission on the deploy user takes every
+unrelated change down with it — which is exactly what happened on the first
+attempt (`SNS:GetTopicAttributes ... AccessDenied` on user `aws-cmd`).
+
+### Granting the deploy user the permissions
+
+Attach this to the deploying IAM user (`aws-cmd`) as an inline policy, e.g.
+`memories-alerting-deploy`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ManageAlertTopic",
+      "Effect": "Allow",
+      "Action": [
+        "sns:CreateTopic",
+        "sns:DeleteTopic",
+        "sns:GetTopicAttributes",
+        "sns:SetTopicAttributes",
+        "sns:Subscribe",
+        "sns:Unsubscribe",
+        "sns:GetSubscriptionAttributes",
+        "sns:ListSubscriptionsByTopic",
+        "sns:TagResource",
+        "sns:UntagResource",
+        "sns:ListTagsForResource"
+      ],
+      "Resource": "arn:aws:sns:eu-west-1:*:memories-pipeline-alerts-*"
+    },
+    {
+      "Sid": "ManageAlarms",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:PutMetricAlarm",
+        "cloudwatch:DeleteAlarms",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:TagResource",
+        "cloudwatch:UntagResource",
+        "cloudwatch:ListTagsForResource"
+      ],
+      "Resource": "*"
+    }
+  ]
+}
+```
+
+`cloudwatch:PutMetricAlarm` does not support resource-level permissions, hence
+the `*` there. The SNS half is scoped to this stack's topic names.
+
+### Turning it on
+
+```bash
+ENABLE_ALERTS=true make deploy
+```
+
+Then **confirm the subscription from the email AWS sends** to `AdminEmail`.
+Until that link is clicked the topic has no confirmed subscriber and every
+alarm fires into nothing.
+
+### What still works with alerts off
+
+`NotifyFailure` emails the admin directly over SES for any failure the state
+machine catches, which is most of them. What is missing without the alarms is
+the backstop: failures that never reach that state at all — an execution that
+times out, or one that dies on the alert Lambda itself.

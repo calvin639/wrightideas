@@ -122,6 +122,17 @@ echo "🔑 Authenticating Docker to ECR"
 aws ecr get-login-password --region "$REGION" \
   | docker login --username AWS --password-stdin "${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
 
+# Alerting is opt-in because the SNS topic and CloudWatch alarms need IAM
+# actions the deploy user may not have, and a CloudFormation failure on those
+# rolls the ENTIRE stack back — losing every unrelated change with it.
+ENABLE_ALERTS="${ENABLE_ALERTS:-false}"
+if [ "$ENABLE_ALERTS" != "true" ]; then
+  echo "⚠️  Pipeline alerts are OFF (ENABLE_ALERTS=$ENABLE_ALERTS)."
+  echo "    Failed and timed-out executions will not raise an alarm."
+  echo "    Grant the deploy user the SNS/CloudWatch actions in RUNBOOK.md,"
+  echo "    then redeploy with: ENABLE_ALERTS=true make deploy"
+fi
+
 echo "🚀 Deploying to environment: $ENV"
 echo "   Stripe key:   ${STRIPE_KEY:0:10}..."
 echo "   Runway key:   ${RUNWAY_AI_KEY:0:10}..."
@@ -130,6 +141,7 @@ echo "   Runway URL:   $RUNWAY_URL"
 echo "   Runway model: $MODEL"
 echo "   fal key:      ${FAL_KEY_VALUE:0:10}..."
 echo "   fal model:    $VIDEO_MODEL"
+echo "   alerts:       $ENABLE_ALERTS"
 echo ""
 
 # NOTE: --parameter-overrides on the CLI replaces all samconfig.toml overrides,
@@ -145,6 +157,7 @@ OVERRIDES=(
   "RunwayModel=$MODEL"
   "FalApiKey=$FAL_KEY_VALUE"
   "VideoModel=$VIDEO_MODEL"
+  "EnableAlerts=$ENABLE_ALERTS"
 )
 
 # Build before deploying. `sam deploy` reads .aws-sam/build/template.yaml, not
